@@ -4,7 +4,7 @@
 
 # IntelAlloc Image Skill
 
-本 skill 是 IntelAlloc 平臺專用的 Codex 與 WorkBuddy 生圖/改圖工具，用於讓 GPT 在 Codex 或 WorkBuddy 會話中穩定調用 IntelAlloc 的 image-2 模型，完成文本生圖、圖片編輯、參考圖編輯與連續追改等工作流。
+本 skill 是 IntelAlloc 平臺專用的 Codex 與 WorkBuddy 生圖/改圖工具，用於讓 GPT 在 Codex 或 WorkBuddy 會話中穩定調用 IntelAlloc 的 GPT Image 2.5 Flare、GPT Image 2.5 Sunburst 與 GPT Image 2，完成文本生圖、圖片編輯、參考圖編輯與連續追改等工作流。
 
 IntelAlloc 平臺註冊連結：[https://backend.intelalloc.com/register?promo=JINGGE](https://backend.intelalloc.com/register?promo=JINGGE)
 

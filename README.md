@@ -10,7 +10,7 @@ This repository supports English and Chinese users. Install the skill and talk t
 
 ## IntelAlloc Platform
 
-`intelalloc-image` is built specifically for the IntelAlloc platform. It supports both Codex and WorkBuddy workflows, enabling GPT to call IntelAlloc's image-2 model reliably for image generation, image editing, reference-image workflows, and iterative follow-up edits. Codex and WorkBuddy can install the skill independently and keep their local configuration, history, and default output locations separate.
+`intelalloc-image` is built specifically for the IntelAlloc platform. It supports both Codex and WorkBuddy workflows, enabling GPT to call IntelAlloc's GPT Image 2.5 Flare, GPT Image 2.5 Sunburst, and GPT Image 2 models reliably for image generation, image editing, reference-image workflows, and iterative follow-up edits. Codex and WorkBuddy can install the skill independently and keep their local configuration, history, and default output locations separate.
 
 IntelAlloc registration: [https://backend.intelalloc.com/register?promo=JINGGE](https://backend.intelalloc.com/register?promo=JINGGE)
 
