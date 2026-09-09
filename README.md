@@ -6,7 +6,7 @@
 
 Codex and WorkBuddy skill for generating and editing images through the IntelAlloc image API.
 
-This repository supports English and Chinese users. Install the skill and talk to Codex or WorkBuddy naturally. Before image generation, it checks the runtime host and model before selecting an API key.
+This repository supports English and Chinese users. Install the skill and talk to Codex or WorkBuddy naturally; normal replies follow the language of each request. Before image generation, it checks the runtime host and model before selecting an API key.
 
 ## IntelAlloc Platform
 
@@ -29,6 +29,15 @@ Use IntelAlloc to generate a futuristic city at night and save it to D:\out\city
 ```
 
 When no save path is specified, Codex saves unique PNGs under `~/Pictures/IntelAlloc/Codex` and WorkBuddy saves them under `~/Pictures/IntelAlloc/WorkBuddy`. Successful requests display the image and a clickable link to the complete saved directory path.
+
+After the first successful image in each conversation, the host shows the current model, size, and quality once. For example:
+
+```text
+Model: GPT Image 2.5 Flare; size: `auto`; quality: `auto`.
+To view the complete configuration, enter `help`. The system will list all detailed sizes, quality levels, and available models with their characteristics.
+```
+
+Later successful images in the same conversation do not repeat this reminder. Enter `help` to see all detailed sizes, the complete quality list, and available models with their characteristics.
 
 ## Help
 
@@ -210,9 +219,14 @@ Each request reports the active model, size, quality, start time, finish time, a
 Common size presets:
 
 ```text
-1536x1024, 1024x1536, 1024x1024
-2048x1152, 1152x2048, 2048x2048
-3840x2160, 2160x3840
+1536x1024 - Landscape
+1024x1536 - Portrait
+1024x1024 - Square
+2048x1152 - HD Landscape
+1152x2048 - HD Portrait
+2048x2048 - HD Square
+3840x2160 - 4K Landscape
+2160x3840 - 4K Portrait
 ```
 
 You can also use `auto` or any valid custom `WIDTHxHEIGHT`: each edge is at most 3840px and a multiple of 16px, the aspect ratio is at most 3:1, and total pixels are 655,360 through 8,294,400.
@@ -224,6 +238,14 @@ auto, low, medium, high, xhigh, max
 ```
 
 GPT Image 2 supports only `auto`, `low`, `medium`, and `high`; `xhigh` and `max` are rejected before an API request.
+
+Model characteristics:
+
+```text
+GPT Image 2 - compatibility fallback; does not support xhigh or max
+GPT Image 2.5 Flare - fast, for everyday generation
+GPT Image 2.5 Sunburst - higher-quality generation and editing
+```
 
 ## Common Issues
 

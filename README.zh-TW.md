@@ -10,7 +10,7 @@ IntelAlloc 平臺註冊連結：[https://backend.intelalloc.com/register?promo=J
 
 需要註冊邀請碼可以聯繫：takeshikaneshivo@gmail.com
 
-這個 skill 給 Codex 與 WorkBuddy 用戶使用。安裝後，你不需要記 CLI 命令，直接用自然語言告訴 Codex 或 WorkBuddy 生成什麼圖、改哪張圖、輸出到哪裡即可。兩個宿主可以分別安裝 skill，並獨立保存各自的配置、歷史與預設輸出位置。
+這個 skill 給 Codex 與 WorkBuddy 用戶使用。安裝後，你不需要記 CLI 命令，直接用自然語言告訴 Codex 或 WorkBuddy 生成什麼圖、改哪張圖、輸出到哪裡即可。普通回覆會跟隨請求語言：英文請求使用英文，中文請求使用中文；混合語言請求按主要語言回覆。兩個宿主可以分別安裝 skill，並獨立保存各自的配置、歷史與預設輸出位置。
 
 ![IntelAlloc Codex 與 WorkBuddy 圖片工作流示範 1](docs/images/intelalloc-demo-1.png)
 
@@ -63,6 +63,15 @@ macOS WorkBuddy：
 直接對 Codex 或 WorkBuddy 說“IntelAlloc 圖片幫助”，或自然地詢問“可以生成與修改哪些圖片”“預設品質是多少”“圖片會保存到哪裡”。普通回覆會用中文說明生成、改圖、參考圖、批次處理、尺寸品質與保存位置，不要求用戶記憶命令，也不會展示內部路徑或密鑰配置命令。
 
 未指定保存位置時，圖片會自動保存到系統圖片目錄下按宿主區分的 `IntelAlloc` 子目錄；也可以直接說“保存到某個檔案”或“保存到某個目錄”。系統會先嘗試使用符合條件的 GPT 系列模型憑據，無法自動使用時再請用戶提供 IntelAlloc GPT 系列 API key。
+
+每個工作階段首張圖片成功後，宿主只提示一次目前模型、尺寸與品質。例如：
+
+```text
+模型：GPT Image 2.5 Flare；尺寸：`auto`；品質：`auto`。
+如需查看完整配置，請直接輸入 `help`，系統會列出全部詳細尺寸、完整品質列表，以及可選模型和各自特點。
+```
+
+同一工作階段後續成功圖片不再重複提示。需要完整配置時，直接輸入 `help`，即可查看全部詳細尺寸、完整品質列表和可選模型特點。
 
 下面的 Windows 範例使用 `D:\` 路徑；在 macOS 或 Linux 中請改用 `~/Pictures/IntelAlloc/Codex` 或 `/path/to/input.png` 這樣的 POSIX 路徑。
 
@@ -152,9 +161,11 @@ macOS WorkBuddy：
 
 每次請求都會顯示目前使用的模型、尺寸、品質、開始時間、結束時間與耗時。預設值不會改變，除非明確要求修改。
 
-尺寸可使用 `auto`、常用預設或合法的 `WIDTHxHEIGHT`：寬高不超過 3840、均為 16 的倍數、比例不超過 3:1、總像素為 655,360 至 8,294,400。品質可選 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。
+尺寸可使用 `auto`、常用預設或合法的 `WIDTHxHEIGHT`：寬高不超過 3840、均為 16 的倍數、比例不超過 3:1、總像素為 655,360 至 8,294,400。常用預設為：`1536x1024`（橫圖 / Landscape）、`1024x1536`（豎圖 / Portrait）、`1024x1024`（方圖 / Square）、`2048x1152`（高清橫圖 / HD Landscape）、`1152x2048`（高清豎圖 / HD Portrait）、`2048x2048`（高清方圖 / HD Square）、`3840x2160`（4K 橫圖 / 4K Landscape）、`2160x3840`（4K 豎圖 / 4K Portrait）。品質可選 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。
 
 GPT Image 2 僅支援 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 會在傳送 API 請求前被拒絕。
+
+模型特點：GPT Image 2（相容備選，不支援 `xhigh` 和 `max`）；GPT Image 2.5 Flare（速度快，適合日常生成）；GPT Image 2.5 Sunburst（面向更高品質生成與編輯）。
 
 如果只想這一次變更尺寸或品質，可以直接說：
 

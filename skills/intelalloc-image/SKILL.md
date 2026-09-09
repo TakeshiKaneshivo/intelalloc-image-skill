@@ -13,7 +13,7 @@ The CLI is `scripts/intelalloc_image.py`. Run it with Python 3 and standard-libr
 
 The command templates below are resolved by the current host: use the Windows `python` launcher on Windows, and `python3` with POSIX paths on macOS or Linux.
 
-The skill supports English and Chinese natural-language requests. Match the user's language in normal replies: answer English users in English and Chinese users in Chinese. Do not translate or rewrite raw API error bodies.
+The skill supports English and Chinese natural-language requests. Match the user's language in every normal host reply: answer English users in English and Chinese users in Chinese, preserving simplified or traditional Chinese when practical. For mixed-language requests, use the dominant language and do not repeat the same guidance in both languages. Keep model IDs, quality values, sizes, file paths, and `REQUEST_*` metadata unchanged. Do not translate or rewrite raw API error bodies.
 
 For onboarding another Codex or WorkBuddy user, include `USAGE.md` with the skill package. It contains end-user setup, English and Chinese natural-language examples, CLI commands, and safety notes.
 
@@ -243,15 +243,23 @@ Saved to [D:/path/to/output-directory](D:/path/to/output-directory)
 
 For batch output, show one clickable link for the complete batch directory.
 
-For the first successful image result in a Codex or WorkBuddy conversation only, mention the active model, size, and quality. Mention that sizes can switch to `auto`, a common preset, or a valid custom `WIDTHxHEIGHT`. When quality is `auto`, mention the compatible non-auto quality choices; otherwise mention that it can switch to the compatible quality choices. Flare and Sunburst support `low`, `medium`, `high`, `xhigh`, and `max`; GPT Image 2 supports only `low`, `medium`, and `high`.
+For the first successful image result in a Codex or WorkBuddy conversation only, use the short template for the user's language below. Mention only the active model, size, and quality, then tell the user to enter `help`; it will list all detailed sizes, the complete quality list, and the available models with their characteristics. Do not repeat detailed size or quality lists in this first-success reminder. Flare and Sunburst support `low`, `medium`, `high`, `xhigh`, and `max`; GPT Image 2 supports only `low`, `medium`, and `high` in addition to `auto`.
 
-Use the full official name without a positioning parenthesis for the active model: `GPT Image 2.5 Flare`, `GPT Image 2.5 Sunburst`, or `GPT Image 2`. Keep positioning parentheses only on the available model-switch choices:
+Use the full official name without a positioning parenthesis for the active model: `GPT Image 2.5 Flare`, `GPT Image 2.5 Sunburst`, or `GPT Image 2`. Do not mention alternative models in this first-success reminder; the complete model list and positioning information are available through `help`.
 
-- GPT Image 2.5 Flare can switch to `GPT Image 2.5 Sunburst (for higher-quality generation and editing)` or `GPT Image 2 (fallback)`.
-- GPT Image 2.5 Sunburst can switch to `GPT Image 2.5 Flare (for speed and everyday generation)` or `GPT Image 2 (fallback)`.
-- GPT Image 2 can switch to `GPT Image 2.5 Flare (for speed and everyday generation)` or `GPT Image 2.5 Sunburst (for higher-quality generation and editing)`.
+English template:
 
-For Chinese responses, use the same distinction. For example: `模型：GPT Image 2.5 Flare；尺寸：<size>；质量：<quality>。` The active model name has no parenthesis; switching choices use `GPT Image 2.5 Sunburst（面向更高质量生成与编辑）` and `GPT Image 2（备选）`.
+```text
+Model: <active model>; size: `<size>`; quality: `<quality>`.
+To view the complete configuration, enter `help`. The system will list all detailed sizes, quality levels, and available models with their characteristics.
+```
+
+Chinese template:
+
+```text
+模型：<当前模型>；尺寸：`<尺寸>`；质量：`<质量>`。
+如需查看完整配置，请直接输入 `help`，系统会列出全部详细尺寸、完整质量列表，以及可选模型和各自特点。
+```
 
 Do not repeat this guidance after later successful image results in the same conversation, and do not write reminder state to configuration or history.
 

@@ -239,6 +239,31 @@ class RuntimeArgumentTests(unittest.TestCase):
         self.assertIn("WorkBuddy: saves under ~/Pictures/IntelAlloc/WorkBuddy", help_text)
         self.assertIn("Unknown host: keeps ~/Pictures/IntelAlloc", help_text)
 
+    def test_help_reports_labeled_sizes_and_model_characteristics(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(MODULE.command_help(argparse.Namespace()), 0)
+
+        help_text = output.getvalue()
+        expected_presets = (
+            "1536x1024 - 横图 / Landscape",
+            "1024x1536 - 竖图 / Portrait",
+            "1024x1024 - 方图 / Square",
+            "2048x1152 - 高清横图 / HD Landscape",
+            "1152x2048 - 高清竖图 / HD Portrait",
+            "2048x2048 - 高清方图 / HD Square",
+            "3840x2160 - 4K 横图 / 4K Landscape",
+            "2160x3840 - 4K 竖图 / 4K Portrait",
+        )
+        for preset in expected_presets:
+            with self.subTest(preset=preset):
+                self.assertIn(preset, help_text)
+        self.assertIn("GPT Image 2: compatibility fallback; no xhigh or max / 兼容备选；不支持 xhigh 或 max", help_text)
+        self.assertIn("GPT Image 2.5 Flare: fast, for everyday generation / 速度快，适合日常生成", help_text)
+        self.assertIn(
+            "GPT Image 2.5 Sunburst: higher-quality generation and editing / 面向更高质量生成与编辑", help_text
+        )
+
     def test_all_stateful_commands_accept_workbuddy_runtime_arguments(self):
         parser = MODULE.build_parser()
         commands = (
@@ -372,6 +397,49 @@ class ImageModelAndParameterTests(unittest.TestCase):
                 self.assertEqual(MODULE.normalize_persistent_model(model), model)
         with self.assertRaises(MODULE.CliError):
             MODULE.normalize_persistent_model("gpt-image-2.5-flare-2026-09-01")
+
+    def test_invalid_persisted_model_blocks_configure_without_writing(self):
+        parser = MODULE.build_parser()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            MODULE.pathlib.Path, "home", return_value=pathlib.Path(directory)
+        ):
+            original = {"model": "legacy-model", "default_quality": "high"}
+            MODULE.save_json_private(MODULE.config_path("codex"), original)
+            args = parser.parse_args(["configure", "--runtime-host", "codex", "--api-key", "new-key"])
+            with self.assertRaises(MODULE.CliError):
+                MODULE.command_configure(args)
+            self.assertEqual(MODULE.load_config("codex"), original)
+
+    def test_invalid_persisted_model_blocks_generate_before_request(self):
+        parser = MODULE.build_parser()
+        config = {
+            "api_key": "test-key",
+            "model": "legacy-model",
+            MODULE.MODEL_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+            MODULE.SIZE_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+            MODULE.QUALITY_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+        }
+        args = parser.parse_args(["generate", "--runtime-host", "codex", "--prompt", "test"])
+        with mock.patch.object(MODULE, "load_config", return_value=dict(config)), mock.patch.object(
+            MODULE, "request_generation"
+        ) as request:
+            with self.assertRaises(MODULE.CliError):
+                MODULE.command_generate(args)
+            request.assert_not_called()
+
+    def test_valid_model_override_repairs_invalid_persisted_model(self):
+        parser = MODULE.build_parser()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            MODULE.pathlib.Path, "home", return_value=pathlib.Path(directory)
+        ):
+            MODULE.save_json_private(
+                MODULE.config_path("codex"), {"model": "legacy-model", "default_quality": "high"}
+            )
+            args = parser.parse_args(
+                ["configure", "--runtime-host", "codex", "--model", "gpt-image-2.5-flare"]
+            )
+            self.assertEqual(MODULE.command_configure(args), 0)
+            self.assertEqual(MODULE.load_config("codex")["model"], "gpt-image-2.5-flare")
 
     def test_gpt_image_2_rejects_xhigh_and_max(self):
         for quality in ("auto", "low", "medium", "high"):

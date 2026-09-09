@@ -1,6 +1,6 @@
 # IntelAlloc Image Skill Usage
 
-This guide is for Codex and WorkBuddy users who install the `intelalloc-image` skill. You can use natural language in English or Chinese; the host reads this skill and calls the bundled CLI for you.
+This guide is for Codex and WorkBuddy users who install the `intelalloc-image` skill. You can use natural language in English or Chinese; the host reads this skill and calls the bundled CLI for you. Normal replies follow the language of the request: English requests receive English guidance, Chinese requests receive Chinese guidance, and mixed requests use their dominant language.
 
 ## Quick Start
 
@@ -365,14 +365,14 @@ Default size and quality are both `auto`.
 Common size presets:
 
 ```text
-1536x1024
-1024x1536
-1024x1024
-2048x1152
-1152x2048
-2048x2048
-3840x2160
-2160x3840
+1536x1024 - Landscape
+1024x1536 - Portrait
+1024x1024 - Square
+2048x1152 - HD Landscape
+1152x2048 - HD Portrait
+2048x2048 - HD Square
+3840x2160 - 4K Landscape
+2160x3840 - 4K Portrait
 ```
 
 Supported qualities:
@@ -387,6 +387,14 @@ max
 ```
 
 `gpt-image-2` supports only `auto`, `low`, `medium`, and `high`; `xhigh` and `max` are rejected before an API request.
+
+Model characteristics:
+
+```text
+GPT Image 2 - compatibility fallback; does not support xhigh or max
+GPT Image 2.5 Flare - fast, for everyday generation
+GPT Image 2.5 Sunburst - higher-quality generation and editing
+```
 
 You can also use `auto` or a custom `WIDTHxHEIGHT`. Each edge must be at most 3840px and a multiple of 16px, the aspect ratio must not exceed 3:1, and total pixels must be 655,360 through 8,294,400.
 
@@ -408,7 +416,7 @@ Set IntelAlloc default size to auto and default quality to high
 
 After a successful generation or edit, the current host shows the generated image in the conversation and provides a clickable link to the complete saved directory path. Batch edits show the generated images and one link to the complete batch directory path.
 
-Only the first successful image in each Codex or WorkBuddy conversation includes the settings reminder. It states the active model, size, and quality; explains that size can switch to `auto`, a common preset, or a valid custom `WIDTHxHEIGHT`; and lists compatible quality choices. The active model uses its full official name without a positioning parenthesis: GPT Image 2.5 Flare, GPT Image 2.5 Sunburst, or GPT Image 2. The two available model alternatives retain positioning parentheses, such as GPT Image 2.5 Sunburst (for higher-quality generation and editing) and GPT Image 2 (fallback). Later successful images in the same conversation do not repeat this reminder.
+Only the first successful image in each Codex or WorkBuddy conversation includes the settings reminder. English requests receive an English reminder; Chinese requests receive a Chinese reminder. The reminder states only the active model, size, and quality, then tells the user to enter `help`; it will list all detailed sizes, the complete quality list, and the available models with their characteristics. It does not list alternative models, positioning parentheses, or detailed size/quality options. Later successful images in the same conversation do not repeat this reminder.
 
 ## Common Errors
 
@@ -443,6 +451,17 @@ Run `show-config` to confirm the automatically generated device User-Agent, then
 Input image missing: provide a valid local path.
 
 Too many input images: reduce the folder, use a smaller reference set, or explicitly limit to 16.
+
+Invalid saved model:
+
+```text
+Unsupported persistent model: ...
+```
+
+The local configuration contains a model that is no longer allowed. Choose one of
+`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, or `gpt-image-2` with
+`configure --model`, then retry the request. The skill does not silently replace
+the saved model.
 
 For any generation/editing request failure, the current host should show the returned failure reason first, then remind the user to retry or try again later. It should not claim an image was saved or attempt another image operation unless the user asks.
 
@@ -669,7 +688,7 @@ GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会
 
 生成或编辑成功后，当前宿主会在会话里直接展示输出图片，并提供指向完整实际保存目录的可点击链接。批量编辑时，会展示生成图片列表和一个指向完整批次目录的链接。
 
-每个 Codex 或 WorkBuddy 会话仅在首张成功图片后提示一次当前模型、尺寸和质量，并说明可切换到 `auto`、常用预设或合法的自定义 `WIDTHxHEIGHT`，以及兼容的质量档。当前模型使用完整正式名称且不加定位括号，例如：`模型：GPT Image 2.5 Flare；尺寸：auto；质量：auto。` 可切换模型保留定位括号，例如 `GPT Image 2.5 Sunburst（面向更高质量生成与编辑）`、`GPT Image 2（备选）`。该提示不会写入配置或历史，同一会话后续成功图片不再重复。
+每个 Codex 或 WorkBuddy 会话仅在首张成功图片后提示一次当前模型、尺寸和质量，然后明确告诉用户直接输入 `help`；系统会列出全部详细尺寸、完整质量列表，以及可选模型和各自特点。中文请求返回中文提示，例如：`模型：GPT Image 2.5 Flare；尺寸：auto；质量：auto。` 后接：如需查看完整配置，请直接输入 `help`，系统会列出全部详细尺寸、完整质量列表，以及可选模型和各自特点。首次提示不再列出候选模型、定位括号或详细尺寸/质量选项；英文请求返回对应英文提示。该提示不会写入配置或历史，同一会话后续成功图片不再重复。
 
 ### 常见问题
 

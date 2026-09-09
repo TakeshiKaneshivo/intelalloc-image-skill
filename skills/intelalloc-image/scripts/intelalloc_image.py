@@ -51,6 +51,16 @@ COMMON_SIZES = {
     "3840x2160",
     "2160x3840",
 }
+COMMON_SIZE_LABELS = (
+    ("1536x1024", "横图", "Landscape"),
+    ("1024x1536", "竖图", "Portrait"),
+    ("1024x1024", "方图", "Square"),
+    ("2048x1152", "高清横图", "HD Landscape"),
+    ("1152x2048", "高清竖图", "HD Portrait"),
+    ("2048x2048", "高清方图", "HD Square"),
+    ("3840x2160", "4K 横图", "4K Landscape"),
+    ("2160x3840", "4K 竖图", "4K Portrait"),
+)
 SUPPORTED_QUALITIES = {"auto", "low", "medium", "high", "xhigh", "max"}
 PERSISTENT_MODELS = {
     "gpt-image-2.5-flare",
@@ -83,7 +93,8 @@ Size / 分辨率:
                                       Save a default / 保存默认值
   Default / 默认值: {default_size}
   Supported / 支持: auto or WIDTHxHEIGHT / auto 或 WIDTHxHEIGHT
-  Common presets / 常用预设: {sizes}
+  Common presets / 常用预设:
+{sizes}
   Custom limits / 自定义限制: each edge <= 3840, multiples of 16, ratio <= 3:1,
                          total pixels 655360-8294400
 
@@ -93,6 +104,11 @@ Quality / 质量:
   Default / 默认值: {default_quality}
   Supported / 支持: {qualities}
   GPT Image 2: auto|low|medium|high only / 仅支持 auto|low|medium|high
+
+Models / 模型:
+  GPT Image 2: compatibility fallback; no xhigh or max / 兼容备选；不支持 xhigh 或 max
+  GPT Image 2.5 Flare: fast, for everyday generation / 速度快，适合日常生成
+  GPT Image 2.5 Sunburst: higher-quality generation and editing / 面向更高质量生成与编辑
 
 API key / API key:
   Automatic credentials are checked for eligible Codex or WorkBuddy GPT runtimes.
@@ -115,7 +131,10 @@ Diagnostics / 诊断:
   last                   Show the latest output / 查看最近图片
 """.format(
     default_size=DEFAULT_SIZE,
-    sizes=", ".join(sorted(COMMON_SIZES)),
+    sizes="\n".join(
+        "    {0} - {1} / {2}".format(size, zh_label, en_label)
+        for size, zh_label, en_label in COMMON_SIZE_LABELS
+    ),
     default_quality=DEFAULT_QUALITY,
     qualities=", ".join(sorted(SUPPORTED_QUALITIES)),
 )
@@ -477,7 +496,16 @@ def normalize_quality(value: Optional[str]) -> str:
 
 
 def normalize_persistent_model(value: Optional[str]) -> str:
-    value = (value or DEFAULT_MODEL).strip()
+    if value is None:
+        value = DEFAULT_MODEL
+    elif not isinstance(value, str):
+        raise CliError(
+            "Unsupported persistent model: {0}. Supported models: {1}".format(
+                value, ", ".join(sorted(PERSISTENT_MODELS))
+            )
+        )
+    else:
+        value = value.strip() or DEFAULT_MODEL
     if value not in PERSISTENT_MODELS:
         raise CliError(
             "Unsupported persistent model: {0}. Supported models: {1}".format(
@@ -592,7 +620,11 @@ def resolve_settings(args: argparse.Namespace, require_key: bool) -> Dict[str, s
         "edits_endpoint": str(
             getattr(args, "edits_endpoint", None) or cfg.get("edits_endpoint") or DEFAULT_EDITS_ENDPOINT
         ).strip(),
-        "model": str(getattr(args, "model", None) or cfg.get("model") or DEFAULT_MODEL).strip(),
+        "model": (
+            str(getattr(args, "model", None)).strip()
+            if getattr(args, "model", None)
+            else normalize_persistent_model(cfg.get("model"))
+        ),
         "user_agent": str(getattr(args, "user_agent", None) or cfg.get("user_agent") or build_default_user_agent()).strip(),
         "default_size": normalize_size(getattr(args, "size", None) or cfg.get("default_size") or DEFAULT_SIZE),
         "default_quality": normalize_quality(
@@ -1175,7 +1207,7 @@ def command_configure(args: argparse.Namespace) -> int:
     target_model = (
         normalize_persistent_model(args.model)
         if args.model is not None
-        else string_value(cfg.get("model")) or DEFAULT_MODEL
+        else normalize_persistent_model(cfg.get("model"))
     )
     target_quality = normalize_quality(
         args.default_quality if args.default_quality is not None else cfg.get("default_quality") or DEFAULT_QUALITY

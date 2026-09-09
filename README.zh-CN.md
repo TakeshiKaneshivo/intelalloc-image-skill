@@ -10,7 +10,7 @@ IntelAlloc 平台注册链接：[https://backend.intelalloc.com/register?promo=J
 
 需要注册邀请码可以联系：takeshikaneshivo@gmail.com
 
-这个 skill 给 Codex 和 WorkBuddy 用户使用。安装后，你不需要记 CLI 命令，直接用自然语言告诉 Codex 或 WorkBuddy 生成什么图、改哪张图、输出到哪里即可。两个宿主可以分别安装 skill，并独立保存各自的配置、历史和默认输出位置。
+这个 skill 给 Codex 和 WorkBuddy 用户使用。安装后，你不需要记 CLI 命令，直接用自然语言告诉 Codex 或 WorkBuddy 生成什么图、改哪张图、输出到哪里即可。普通回复会跟随请求语言：英文请求使用英文，中文请求使用中文；混合语言请求按主要语言回复。两个宿主可以分别安装 skill，并独立保存各自的配置、历史和默认输出位置。
 
 ![IntelAlloc Codex 和 WorkBuddy 图片工作流演示 1](docs/images/intelalloc-demo-1.png)
 
@@ -63,6 +63,15 @@ macOS WorkBuddy：
 直接对 Codex 或 WorkBuddy 说“IntelAlloc 图片帮助”，或自然地询问“可以生成和修改哪些图片”“默认质量是多少”“图片会保存到哪里”。普通回复会用中文说明生成、改图、参考图、批量处理、尺寸质量和保存位置，不要求用户记忆命令，也不会展示内部路径或密钥配置命令。
 
 未指定保存位置时，图片会自动保存到系统图片目录下按宿主区分的 `IntelAlloc` 子目录；也可以直接说“保存到某个文件”或“保存到某个目录”。系统会先尝试使用符合条件的 GPT 系列模型凭据，无法自动使用时再请用户提供 IntelAlloc GPT 系列 API key。
+
+每个会话首张图片成功后，宿主只提示一次当前模型、尺寸和质量。例如：
+
+```text
+模型：GPT Image 2.5 Flare；尺寸：`auto`；质量：`auto`。
+如需查看完整配置，请直接输入 `help`，系统会列出全部详细尺寸、完整质量列表，以及可选模型和各自特点。
+```
+
+同一会话后续成功图片不再重复提示。需要完整配置时，直接输入 `help`，即可查看全部详细尺寸、完整质量列表和可选模型特点。
 
 下面的 Windows 示例使用 `D:\` 路径；在 macOS 或 Linux 中请改用 `~/Pictures/IntelAlloc/Codex` 或 `/path/to/input.png` 这样的 POSIX 路径。
 
@@ -152,9 +161,11 @@ macOS WorkBuddy：
 
 每次请求都会显示当前使用的模型、尺寸、质量、开始时间、结束时间和耗时。默认值不会改变，除非明确要求修改。
 
-尺寸可使用 `auto`、常用预设或合法的 `WIDTHxHEIGHT`：宽高不超过 3840、均为 16 的倍数、比例不超过 3:1、总像素为 655,360 至 8,294,400。质量可选 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。
+尺寸可使用 `auto`、常用预设或合法的 `WIDTHxHEIGHT`：宽高不超过 3840、均为 16 的倍数、比例不超过 3:1、总像素为 655,360 至 8,294,400。常用预设为：`1536x1024`（横图 / Landscape）、`1024x1536`（竖图 / Portrait）、`1024x1024`（方图 / Square）、`2048x1152`（高清横图 / HD Landscape）、`1152x2048`（高清竖图 / HD Portrait）、`2048x2048`（高清方图 / HD Square）、`3840x2160`（4K 横图 / 4K Landscape）、`2160x3840`（4K 竖图 / 4K Portrait）。质量可选 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。
 
 GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会在发送接口请求前被拒绝。
+
+模型特点：GPT Image 2（兼容备选，不支持 `xhigh` 和 `max`）；GPT Image 2.5 Flare（速度快，适合日常生成）；GPT Image 2.5 Sunburst（面向更高质量生成与编辑）。
 
 如果只想这一次改变尺寸或质量，可以直接说：
 
