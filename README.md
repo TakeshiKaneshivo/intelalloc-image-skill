@@ -197,13 +197,17 @@ Use images in /path/to/refs as references to generate a poster and save it to /p
 Batch edit images in /path/to/source into pixel art style and save outputs to /path/to/out
 ```
 
+## Image Model
+
+The default model is `gpt-image-2.5-flare`, optimized for fast everyday generation. Ask to switch to `gpt-image-2.5-sunburst` for higher-quality generation and editing, or explicitly select `gpt-image-2` as a compatibility fallback. Only these three models can be saved as a default. A selected model remains the default for future requests on the current host until changed again.
+
 ## Size And Quality
 
-Default size is `2048x1152`; default quality is `medium`.
+Default size and quality are both `auto`.
 
-Each request reports the active size, quality, start time, finish time, and elapsed seconds. The current host will also remind you that size and quality can be changed. Defaults are not changed unless you explicitly ask to change them.
+Each request reports the active model, size, quality, start time, finish time, and elapsed seconds. Defaults are not changed unless you explicitly ask to change them.
 
-Supported sizes:
+Common size presets:
 
 ```text
 1536x1024, 1024x1536, 1024x1024
@@ -211,11 +215,15 @@ Supported sizes:
 3840x2160, 2160x3840
 ```
 
+You can also use `auto` or any valid custom `WIDTHxHEIGHT`: each edge is at most 3840px and a multiple of 16px, the aspect ratio is at most 3:1, and total pixels are 655,360 through 8,294,400.
+
 Supported qualities:
 
 ```text
-low, medium, high
+auto, low, medium, high, xhigh, max
 ```
+
+GPT Image 2 supports only `auto`, `low`, `medium`, and `high`; `xhigh` and `max` are rejected before an API request.
 
 ## Common Issues
 

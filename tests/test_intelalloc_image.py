@@ -130,7 +130,9 @@ class KeySelectionTests(unittest.TestCase):
         }
         with mock.patch.object(MODULE, "load_config", return_value=cfg), mock.patch.object(
             MODULE, "resolve_automatic_api_key", return_value=automatic
-        ) as resolve_auto, mock.patch.object(MODULE, "save_automatic_api_key") as save_key:
+        ) as resolve_auto, mock.patch.object(MODULE, "save_automatic_api_key") as save_key, mock.patch.object(
+            MODULE, "save_json_private"
+        ):
             settings = MODULE.resolve_settings(request_args("workbuddy", "gpt-5.6-luna"), require_key=True)
 
         self.assertEqual(settings["api_key"], "old-key")
@@ -159,7 +161,9 @@ class KeySelectionTests(unittest.TestCase):
         }
         with mock.patch.object(MODULE, "load_config", return_value=cfg), mock.patch.object(
             MODULE, "resolve_automatic_api_key", return_value=automatic
-        ) as resolve_auto, mock.patch.object(MODULE, "save_automatic_api_key") as save_key:
+        ) as resolve_auto, mock.patch.object(MODULE, "save_automatic_api_key") as save_key, mock.patch.object(
+            MODULE, "save_json_private"
+        ):
             settings = MODULE.resolve_settings(request_args("workbuddy", "gpt-5.6-luna"), require_key=True)
 
         self.assertEqual(settings["api_key"], "saved-key")
@@ -187,7 +191,9 @@ class KeySelectionTests(unittest.TestCase):
         }
         with mock.patch.object(MODULE, "load_config", return_value=cfg), mock.patch.object(
             MODULE, "resolve_automatic_api_key", return_value=automatic
-        ) as resolve_auto, mock.patch.object(MODULE, "save_automatic_api_key") as save_key:
+        ) as resolve_auto, mock.patch.object(MODULE, "save_automatic_api_key") as save_key, mock.patch.object(
+            MODULE, "save_json_private"
+        ):
             settings = MODULE.resolve_settings(request_args("workbuddy", "gpt-5.6-luna"), require_key=True)
 
         self.assertEqual(settings["api_key"], "saved-key")
@@ -211,7 +217,9 @@ class KeySelectionTests(unittest.TestCase):
         }
         with mock.patch.object(MODULE, "load_config", return_value=cfg), mock.patch.object(
             MODULE, "resolve_automatic_api_key", return_value=automatic
-        ) as resolve_auto, mock.patch.object(MODULE, "save_automatic_api_key") as save_key:
+        ) as resolve_auto, mock.patch.object(MODULE, "save_automatic_api_key") as save_key, mock.patch.object(
+            MODULE, "save_json_private"
+        ):
             settings = MODULE.resolve_settings(request_args(), require_key=True)
 
         self.assertEqual(settings["api_key"], "manual-key")
@@ -346,6 +354,226 @@ class HostStateIsolationTests(unittest.TestCase):
         )
         self.assertEqual(explicit_file, pathlib.Path("D:/out/result.png"))
         self.assertEqual(explicit_directory.parent, pathlib.Path("D:/out"))
+
+
+class ImageModelAndParameterTests(unittest.TestCase):
+    def test_gpt_image_2_5_defaults_and_qualities(self):
+        self.assertEqual(MODULE.DEFAULT_MODEL, "gpt-image-2.5-flare")
+        self.assertEqual(MODULE.DEFAULT_SIZE, "auto")
+        self.assertEqual(MODULE.DEFAULT_QUALITY, "auto")
+        self.assertEqual(MODULE.normalize_size(None), "auto")
+        for quality in ("auto", "low", "medium", "high", "xhigh", "max"):
+            with self.subTest(quality=quality):
+                self.assertEqual(MODULE.normalize_quality(quality), quality)
+
+    def test_persistent_model_validation_allows_only_public_models(self):
+        for model in MODULE.PERSISTENT_MODELS:
+            with self.subTest(model=model):
+                self.assertEqual(MODULE.normalize_persistent_model(model), model)
+        with self.assertRaises(MODULE.CliError):
+            MODULE.normalize_persistent_model("gpt-image-2.5-flare-2026-09-01")
+
+    def test_gpt_image_2_rejects_xhigh_and_max(self):
+        for quality in ("auto", "low", "medium", "high"):
+            with self.subTest(quality=quality):
+                MODULE.validate_model_quality("gpt-image-2", quality)
+        for quality in ("xhigh", "max"):
+            with self.subTest(quality=quality):
+                with self.assertRaises(MODULE.CliError):
+                    MODULE.validate_model_quality("gpt-image-2", quality)
+
+    def test_custom_size_validation(self):
+        for size in ("auto", "1024x640", "1536x864", "2048x1152", "3840x2160"):
+            with self.subTest(size=size):
+                self.assertEqual(MODULE.normalize_size(size), size)
+
+        invalid_sizes = (
+            "1024",
+            "0x1024",
+            "1025x1024",
+            "4096x1024",
+            "1024x512",
+            "3840x1024",
+            "1024x1024x1",
+        )
+        for size in invalid_sizes:
+            with self.subTest(size=size):
+                with self.assertRaises(MODULE.CliError):
+                    MODULE.normalize_size(size)
+
+    def test_parser_accepts_custom_request_and_default_sizes(self):
+        parser = MODULE.build_parser()
+        request_args = parser.parse_args(
+            ["generate", "--prompt", "test", "--size", "1536x864", "--quality", "xhigh"]
+        )
+        config_args = parser.parse_args(["configure", "--default-size", "auto", "--default-quality", "max"])
+        self.assertEqual(request_args.size, "1536x864")
+        self.assertEqual(request_args.quality, "xhigh")
+        self.assertEqual(config_args.default_size, "auto")
+        self.assertEqual(config_args.default_quality, "max")
+
+    def test_generation_and_edit_payloads_preserve_gpt_image_2_5_parameters(self):
+        settings = {
+            "model": "gpt-image-2.5-sunburst",
+            "default_size": "1536x864",
+            "default_quality": "max",
+        }
+        body = json.loads(MODULE.build_generation_body("test prompt", settings).decode("utf-8"))
+        self.assertEqual(body["model"], "gpt-image-2.5-sunburst")
+        self.assertEqual(body["size"], "1536x864")
+        self.assertEqual(body["quality"], "max")
+
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = pathlib.Path(directory) / "input.png"
+            image_path.write_bytes(b"input")
+            upload = MODULE.UploadImage(
+                source_path=image_path,
+                upload_path=image_path,
+                filename="input.png",
+                content_type="image/png",
+                optimized=False,
+                original_bytes=5,
+                upload_bytes=5,
+            )
+            multipart, _ = MODULE.build_multipart("test prompt", [upload], settings)
+
+        self.assertIn(b'gpt-image-2.5-sunburst', multipart)
+        self.assertIn(b'1536x864', multipart)
+        self.assertIn(b'max', multipart)
+
+    def test_request_metadata_includes_model(self):
+        output = io.StringIO()
+        settings = {
+            "model": "gpt-image-2.5-flare",
+            "default_size": "auto",
+            "default_quality": "auto",
+        }
+        with contextlib.redirect_stderr(output):
+            MODULE.print_request_options(settings)
+
+        self.assertIn("REQUEST_MODEL=gpt-image-2.5-flare", output.getvalue())
+        self.assertIn("REQUEST_SIZE=auto", output.getvalue())
+        self.assertIn("REQUEST_QUALITY=auto", output.getvalue())
+        self.assertEqual(
+            output.getvalue().splitlines(),
+            [
+                "REQUEST_MODEL=gpt-image-2.5-flare",
+                "REQUEST_SIZE=auto",
+                "REQUEST_QUALITY=auto",
+            ],
+        )
+
+    def test_legacy_defaults_migrate_once(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            MODULE.pathlib.Path, "home", return_value=pathlib.Path(directory)
+        ):
+            cfg = {
+                "model": "gpt-image-2",
+                "default_size": "2048x1152",
+                "default_quality": "medium",
+            }
+            self.assertTrue(MODULE.migrate_gpt_image_2_5_defaults(cfg, "codex"))
+            self.assertEqual(cfg["model"], "gpt-image-2.5-flare")
+            self.assertEqual(cfg["default_size"], "auto")
+            self.assertEqual(cfg["default_quality"], "auto")
+            self.assertFalse(MODULE.migrate_gpt_image_2_5_defaults(cfg, "codex"))
+
+    def test_explicit_post_upgrade_model_choice_is_not_migrated_again(self):
+        parser = MODULE.build_parser()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            MODULE.pathlib.Path, "home", return_value=pathlib.Path(directory)
+        ):
+            MODULE.save_json_private(
+                MODULE.config_path("codex"),
+                {"model": "gpt-image-2", "default_size": "2048x1152", "default_quality": "medium"},
+            )
+            args = parser.parse_args(["configure", "--runtime-host", "codex", "--model", "gpt-image-2"])
+            self.assertEqual(MODULE.command_configure(args), 0)
+            cfg = MODULE.load_config("codex")
+            MODULE.migrate_gpt_image_2_5_defaults(cfg, "codex")
+            self.assertEqual(cfg["model"], "gpt-image-2")
+            self.assertEqual(cfg["default_size"], "auto")
+            self.assertEqual(cfg["default_quality"], "auto")
+
+    def test_incompatible_model_and_quality_do_not_partially_update_config(self):
+        parser = MODULE.build_parser()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            MODULE.pathlib.Path, "home", return_value=pathlib.Path(directory)
+        ):
+            original = {"model": "gpt-image-2.5-flare", "default_quality": "max"}
+            MODULE.save_json_private(MODULE.config_path("codex"), original)
+            args = parser.parse_args(
+                [
+                    "configure",
+                    "--runtime-host",
+                    "codex",
+                    "--model",
+                    "gpt-image-2",
+                    "--default-quality",
+                    "max",
+                ]
+            )
+            with self.assertRaises(MODULE.CliError):
+                MODULE.command_configure(args)
+            self.assertEqual(MODULE.load_config("codex"), original)
+
+    def test_image_2_incompatible_quality_is_rejected_before_request(self):
+        parser = MODULE.build_parser()
+        config = {
+            "api_key": "test-key",
+            "model": "gpt-image-2",
+            "default_quality": "xhigh",
+            MODULE.MODEL_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+            MODULE.SIZE_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+            MODULE.QUALITY_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+        }
+        commands = (
+            ("generate", ["generate", "--prompt", "test"], "request_generation"),
+            ("edit", ["edit", "--prompt", "test", "--input", "input.png"], "request_edit"),
+            ("batch-edit", ["batch-edit", "--prompt", "test", "--input-dir", "inputs"], "request_edit"),
+        )
+        for name, argv, request_name in commands:
+            with self.subTest(command=name), mock.patch.object(MODULE, "load_config", return_value=dict(config)), mock.patch.object(
+                MODULE, request_name
+            ) as request:
+                args = parser.parse_args(argv)
+                with self.assertRaises(MODULE.CliError):
+                    args.func(args)
+                request.assert_not_called()
+
+    def test_hidden_request_model_override_does_not_change_saved_model(self):
+        parser = MODULE.build_parser()
+        config = {
+            "api_key": "test-key",
+            "model": "gpt-image-2.5-flare",
+            MODULE.MODEL_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+            MODULE.SIZE_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+            MODULE.QUALITY_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+        }
+        args = parser.parse_args(["generate", "--prompt", "test", "--model", "diagnostic-model"])
+        with mock.patch.object(MODULE, "load_config", return_value=config):
+            settings = MODULE.resolve_settings(args, require_key=True)
+        self.assertEqual(settings["model"], "diagnostic-model")
+        self.assertEqual(config["model"], "gpt-image-2.5-flare")
+
+    def test_model_api_error_does_not_change_saved_model_or_retry_with_fallback(self):
+        parser = MODULE.build_parser()
+        config = {
+            "api_key": "test-key",
+            "model": "gpt-image-2.5-flare",
+            MODULE.MODEL_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+            MODULE.SIZE_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+            MODULE.QUALITY_MIGRATION_KEY: MODULE.GPT_IMAGE_2_5_MIGRATION_VERSION,
+        }
+        args = parser.parse_args(["generate", "--prompt", "test", "--model", "unavailable-model"])
+        with mock.patch.object(MODULE, "load_config", return_value=config), mock.patch.object(
+            MODULE, "request_generation", side_effect=MODULE.ApiResponseError("unknown model", status=400)
+        ) as request:
+            with self.assertRaises(MODULE.ApiResponseError):
+                MODULE.command_generate(args)
+        self.assertEqual(config["model"], "gpt-image-2.5-flare")
+        request.assert_called_once()
+        self.assertEqual(request.call_args.args[1]["model"], "unavailable-model")
 
 
 if __name__ == "__main__":

@@ -41,17 +41,17 @@ Answer in the user's language and use ordinary language. A normal help reply sho
 - process images in a folder one by one; and
 - choose the image size, quality, and save location when the user asks.
 
-Explain that the default is a large landscape image (2048 x 1152) at medium quality, and that results are automatically saved in a host-specific folder under `IntelAlloc` when no location is provided. Tell the user they can simply say where to save a file or folder. Explain that an eligible GPT-series runtime credential is tried automatically; if it cannot be used, ask the user to provide an IntelAlloc GPT-series API key.
+Explain that the default uses GPT Image 2.5 Flare with automatic size and quality selection, and that results are automatically saved in a host-specific folder under `IntelAlloc` when no location is provided. Tell the user they can simply say where to save a file or folder. Explain that an eligible GPT-series runtime credential is tried automatically; if it cannot be used, ask the user to provide an IntelAlloc GPT-series API key.
 
 Do not show command names, command-line flags, Python code, API endpoints, internal configuration paths, or raw help output in an ordinary help reply. Only provide CLI details when the user explicitly asks for developer, scripting, or command-line usage. Do not run configuration, diagnostics, generation, editing, or any other state-changing command for a help request alone.
 
 ## Defaults
 
-- Model: `gpt-image-2`
+- Model: `gpt-image-2.5-flare`
 - Generation endpoint: `https://backend.intelalloc.com/v1/images/generations`
 - Edit endpoint: `https://backend.intelalloc.com/v1/images/edits`
-- Default size: `2048x1152`
-- Default quality: `medium`
+- Default size: `auto`
+- Default quality: `auto`
 - Output format: `png`
 - Stream: `true`
 - Partial images: `2`
@@ -60,9 +60,9 @@ Do not show command names, command-line flags, Python code, API endpoints, inter
 - Edit upload optimization: for multi-image edits, optimize upload copies first when Pillow is available; never modify the original input images.
 - User-Agent: generated automatically from the current host and device environment using a client-appropriate style
 
-Supported sizes: `1536x1024`, `1024x1536`, `1024x1024`, `2048x1152`, `1152x2048`, `2048x2048`, `3840x2160`, `2160x3840`.
+Common size presets: `1536x1024`, `1024x1536`, `1024x1024`, `2048x1152`, `1152x2048`, `2048x2048`, `3840x2160`, `2160x3840`. The size may also be `auto` or a custom `WIDTHxHEIGHT`: each edge is at most 3840px and a multiple of 16px, the aspect ratio is at most 3:1, and total pixels are 655,360 through 8,294,400.
 
-Supported qualities: `low`, `medium`, `high`.
+Supported qualities: `auto`, `low`, `medium`, `high`, `xhigh`, `max`.
 
 ## Configuration
 
@@ -104,10 +104,12 @@ No initialization command is required. Codex and WorkBuddy credential files are 
 Update default size or quality when the user asks:
 
 ```bash
-python scripts/intelalloc_image.py configure --default-size 2048x1152 --default-quality high
+python scripts/intelalloc_image.py configure --default-size auto --default-quality auto
 ```
 
-Never change or override size/quality unless the user explicitly asks for a size or quality. For ordinary generation/editing requests, omit `--size` and `--quality` so the local defaults are used. When a request starts, show the user the effective `REQUEST_SIZE` and `REQUEST_QUALITY` from the CLI and mention they can ask for another size or quality.
+When the user explicitly asks to switch to GPT Image 2.5 Flare, GPT Image 2.5 Sunburst, or GPT Image 2, persist that choice for the current host with `configure --model <model-id>` before continuing the image request. Persist only `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, or `gpt-image-2`. Do not change the persisted model merely because a prompt benefits from a different model. Flare is the default speed-oriented model, Sunburst is the quality-oriented model, and GPT Image 2 is a compatibility fallback that users may choose explicitly.
+
+Never change or override model, size, or quality unless the user explicitly asks. For ordinary generation/editing requests, omit `--size` and `--quality` so the local defaults are used. A size may be `auto` or any valid custom `WIDTHxHEIGHT` value. GPT Image 2 supports only `auto`, `low`, `medium`, and `high` quality; do not send `xhigh` or `max` for that model. When a request starts, read `REQUEST_MODEL`, `REQUEST_SIZE`, and `REQUEST_QUALITY` from the CLI.
 
 Update the HTTP User-Agent if the user needs to test Cloudflare/API access rules:
 
@@ -134,7 +136,7 @@ python scripts/intelalloc_image.py generate --prompt "city at night" --output "/
 Override size or quality for a single request:
 
 ```bash
-python scripts/intelalloc_image.py generate --prompt "poster" --size 3840x2160 --quality high --output "/path/to/poster.png"
+python scripts/intelalloc_image.py generate --prompt "poster" --size 1536x864 --quality high --output "/path/to/poster.png"
 ```
 
 Only use `--size` or `--quality` when the user explicitly requested those values.
@@ -218,6 +220,7 @@ After successful commands, parse standard output lines:
 
 Also surface request metadata from stderr/stdout when present:
 
+- `REQUEST_MODEL=<model>`
 - `REQUEST_SIZE=<size>`
 - `REQUEST_QUALITY=<quality>`
 - `REQUEST_STARTED_AT=<local timestamp>`
@@ -239,6 +242,18 @@ Saved to [D:/path/to/output-directory](D:/path/to/output-directory)
 ```
 
 For batch output, show one clickable link for the complete batch directory.
+
+For the first successful image result in a Codex or WorkBuddy conversation only, mention the active model, size, and quality. Mention that sizes can switch to `auto`, a common preset, or a valid custom `WIDTHxHEIGHT`. When quality is `auto`, mention the compatible non-auto quality choices; otherwise mention that it can switch to the compatible quality choices. Flare and Sunburst support `low`, `medium`, `high`, `xhigh`, and `max`; GPT Image 2 supports only `low`, `medium`, and `high`.
+
+Use the full official name without a positioning parenthesis for the active model: `GPT Image 2.5 Flare`, `GPT Image 2.5 Sunburst`, or `GPT Image 2`. Keep positioning parentheses only on the available model-switch choices:
+
+- GPT Image 2.5 Flare can switch to `GPT Image 2.5 Sunburst (for higher-quality generation and editing)` or `GPT Image 2 (fallback)`.
+- GPT Image 2.5 Sunburst can switch to `GPT Image 2.5 Flare (for speed and everyday generation)` or `GPT Image 2 (fallback)`.
+- GPT Image 2 can switch to `GPT Image 2.5 Flare (for speed and everyday generation)` or `GPT Image 2.5 Sunburst (for higher-quality generation and editing)`.
+
+For Chinese responses, use the same distinction. For example: `模型：GPT Image 2.5 Flare；尺寸：<size>；质量：<quality>。` The active model name has no parenthesis; switching choices use `GPT Image 2.5 Sunburst（面向更高质量生成与编辑）` and `GPT Image 2（备选）`.
+
+Do not repeat this guidance after later successful image results in the same conversation, and do not write reminder state to configuration or history.
 
 ## Failure Handling
 

@@ -26,9 +26,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 DEFAULT_GENERATIONS_ENDPOINT = "https://backend.intelalloc.com/v1/images/generations"
 DEFAULT_EDITS_ENDPOINT = "https://backend.intelalloc.com/v1/images/edits"
-DEFAULT_MODEL = "gpt-image-2"
-DEFAULT_SIZE = "2048x1152"
-DEFAULT_QUALITY = "medium"
+DEFAULT_MODEL = "gpt-image-2.5-flare"
+DEFAULT_SIZE = "auto"
+DEFAULT_QUALITY = "auto"
 CODEX_CLI_VERSION = "0.77.0"
 OUTPUT_FORMAT = "png"
 PARTIAL_IMAGES = 2
@@ -41,7 +41,7 @@ UPLOAD_OPTIMIZE_MAX_EDGE = 2048
 UPLOAD_OPTIMIZE_JPEG_QUALITY = 85
 UPLOAD_OPTIMIZE_MIN_BYTES = 512 * 1024
 
-SUPPORTED_SIZES = {
+COMMON_SIZES = {
     "1536x1024",
     "1024x1536",
     "1024x1024",
@@ -51,8 +51,23 @@ SUPPORTED_SIZES = {
     "3840x2160",
     "2160x3840",
 }
-SUPPORTED_QUALITIES = {"low", "medium", "high"}
+SUPPORTED_QUALITIES = {"auto", "low", "medium", "high", "xhigh", "max"}
+PERSISTENT_MODELS = {
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "gpt-image-2",
+}
+GPT_IMAGE_2_MODEL = "gpt-image-2"
+GPT_IMAGE_2_UNSUPPORTED_QUALITIES = {"xhigh", "max"}
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+MAX_IMAGE_EDGE = 3840
+MIN_IMAGE_PIXELS = 655_360
+MAX_IMAGE_PIXELS = 8_294_400
+MAX_IMAGE_ASPECT_RATIO = 3
+GPT_IMAGE_2_5_MIGRATION_VERSION = 1
+MODEL_MIGRATION_KEY = "gpt_image_2_5_model_migration"
+SIZE_MIGRATION_KEY = "gpt_image_2_5_size_migration"
+QUALITY_MIGRATION_KEY = "gpt_image_2_5_quality_migration"
 
 HELP_TEXT = """IntelAlloc Image Help / IntelAlloc 图片帮助
 
@@ -67,13 +82,17 @@ Size / 分辨率:
   Persistent default: configure --default-size <size>
                                       Save a default / 保存默认值
   Default / 默认值: {default_size}
-  Supported / 支持: {sizes}
+  Supported / 支持: auto or WIDTHxHEIGHT / auto 或 WIDTHxHEIGHT
+  Common presets / 常用预设: {sizes}
+  Custom limits / 自定义限制: each edge <= 3840, multiples of 16, ratio <= 3:1,
+                         total pixels 655360-8294400
 
 Quality / 质量:
-  Request override: --quality low|medium|high
+  Request override: --quality auto|low|medium|high|xhigh|max
   Persistent default: configure --default-quality <quality>
   Default / 默认值: {default_quality}
   Supported / 支持: {qualities}
+  GPT Image 2: auto|low|medium|high only / 仅支持 auto|low|medium|high
 
 API key / API key:
   Automatic credentials are checked for eligible Codex or WorkBuddy GPT runtimes.
@@ -96,7 +115,7 @@ Diagnostics / 诊断:
   last                   Show the latest output / 查看最近图片
 """.format(
     default_size=DEFAULT_SIZE,
-    sizes=", ".join(sorted(SUPPORTED_SIZES)),
+    sizes=", ".join(sorted(COMMON_SIZES)),
     default_quality=DEFAULT_QUALITY,
     qualities=", ".join(sorted(SUPPORTED_QUALITIES)),
 )
@@ -421,13 +440,29 @@ def mask_key(value: str) -> str:
 
 def normalize_size(value: Optional[str]) -> str:
     value = (value or DEFAULT_SIZE).strip()
-    if value not in SUPPORTED_SIZES:
+    if value == "auto":
+        return value
+    match = re.fullmatch(r"([1-9][0-9]*)x([1-9][0-9]*)", value)
+    if not match:
         raise CliError(
-            "Unsupported size: {0}. Supported sizes: {1}".format(
-                value, ", ".join(sorted(SUPPORTED_SIZES))
+            "Unsupported size: {0}. Use auto or WIDTHxHEIGHT with positive integer dimensions.".format(value)
+        )
+    width, height = (int(match.group(1)), int(match.group(2)))
+    if width > MAX_IMAGE_EDGE or height > MAX_IMAGE_EDGE:
+        raise CliError("Unsupported size: {0}. Each edge must be at most {1}px.".format(value, MAX_IMAGE_EDGE))
+    if width % 16 or height % 16:
+        raise CliError("Unsupported size: {0}. Width and height must be multiples of 16px.".format(value))
+    longer, shorter = max(width, height), min(width, height)
+    if longer > shorter * MAX_IMAGE_ASPECT_RATIO:
+        raise CliError("Unsupported size: {0}. The aspect ratio must not exceed 3:1.".format(value))
+    pixels = width * height
+    if not MIN_IMAGE_PIXELS <= pixels <= MAX_IMAGE_PIXELS:
+        raise CliError(
+            "Unsupported size: {0}. Total pixels must be between {1} and {2}.".format(
+                value, MIN_IMAGE_PIXELS, MAX_IMAGE_PIXELS
             )
         )
-    return value
+    return "{0}x{1}".format(width, height)
 
 
 def normalize_quality(value: Optional[str]) -> str:
@@ -441,9 +476,58 @@ def normalize_quality(value: Optional[str]) -> str:
     return value
 
 
+def normalize_persistent_model(value: Optional[str]) -> str:
+    value = (value or DEFAULT_MODEL).strip()
+    if value not in PERSISTENT_MODELS:
+        raise CliError(
+            "Unsupported persistent model: {0}. Supported models: {1}".format(
+                value, ", ".join(sorted(PERSISTENT_MODELS))
+            )
+        )
+    return value
+
+
+def validate_model_quality(model: str, quality: str) -> None:
+    if model == GPT_IMAGE_2_MODEL and quality in GPT_IMAGE_2_UNSUPPORTED_QUALITIES:
+        raise CliError(
+            "Unsupported quality for GPT Image 2: {0}. GPT Image 2 supports: auto, low, medium, high.".format(
+                quality
+            )
+        )
+
+
+def migration_complete(cfg: Dict[str, Any], key: str) -> bool:
+    return cfg.get(key) == GPT_IMAGE_2_5_MIGRATION_VERSION
+
+
+def migrate_gpt_image_2_5_defaults(cfg: Dict[str, Any], runtime_host: str) -> bool:
+    """Migrate legacy built-in defaults once without overriding later explicit choices."""
+    changed = False
+    if not migration_complete(cfg, MODEL_MIGRATION_KEY):
+        if string_value(cfg.get("model")) == "gpt-image-2":
+            cfg["model"] = DEFAULT_MODEL
+        cfg[MODEL_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
+        changed = True
+    if not migration_complete(cfg, SIZE_MIGRATION_KEY):
+        if string_value(cfg.get("default_size")) == "2048x1152":
+            cfg["default_size"] = DEFAULT_SIZE
+        cfg[SIZE_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
+        changed = True
+    if not migration_complete(cfg, QUALITY_MIGRATION_KEY):
+        if string_value(cfg.get("default_quality")) == "medium":
+            cfg["default_quality"] = DEFAULT_QUALITY
+        cfg[QUALITY_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
+        changed = True
+    if changed:
+        save_json_private(config_path(runtime_host), cfg)
+    return changed
+
+
 def resolve_settings(args: argparse.Namespace, require_key: bool) -> Dict[str, str]:
     runtime = resolve_runtime_context(args)
     cfg = load_config(runtime["host"])
+    if require_key:
+        migrate_gpt_image_2_5_defaults(cfg, runtime["host"])
     configured_candidates = (
         getattr(args, "api_key", None),
         os.environ.get("INTELALLOC_API_KEY"),
@@ -538,6 +622,7 @@ def resolve_settings(args: argparse.Namespace, require_key: bool) -> Dict[str, s
         settings["model"] = DEFAULT_MODEL
     if not settings["user_agent"]:
         settings["user_agent"] = build_default_user_agent()
+    validate_model_quality(settings["model"], settings["default_quality"])
     return settings
 
 
@@ -1079,19 +1164,23 @@ def print_saved_many(paths: Sequence[pathlib.Path]) -> None:
 
 
 def print_request_options(settings: Dict[str, str]) -> None:
+    print("REQUEST_MODEL=" + settings["model"], file=sys.stderr)
     print("REQUEST_SIZE=" + settings["default_size"], file=sys.stderr)
     print("REQUEST_QUALITY=" + settings["default_quality"], file=sys.stderr)
-    print(
-        "本次使用尺寸 {0}，质量 {1}。如需其他尺寸或质量，可以直接说明。".format(
-            settings["default_size"], settings["default_quality"]
-        ),
-        file=sys.stderr,
-    )
 
 
 def command_configure(args: argparse.Namespace) -> int:
     runtime = resolve_runtime_context(args)
-    cfg = load_config(runtime["host"])
+    cfg = dict(load_config(runtime["host"]))
+    target_model = (
+        normalize_persistent_model(args.model)
+        if args.model is not None
+        else string_value(cfg.get("model")) or DEFAULT_MODEL
+    )
+    target_quality = normalize_quality(
+        args.default_quality if args.default_quality is not None else cfg.get("default_quality") or DEFAULT_QUALITY
+    )
+    validate_model_quality(target_model, target_quality)
     if args.api_key is not None:
         cfg["api_key"] = args.api_key.strip()
         cfg["api_key_origin"] = "manual" if cfg["api_key"] else ""
@@ -1100,14 +1189,17 @@ def command_configure(args: argparse.Namespace) -> int:
         cfg.pop("api_key_saved_at", None)
     if args.default_size is not None:
         cfg["default_size"] = normalize_size(args.default_size)
+        cfg[SIZE_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
     if args.default_quality is not None:
-        cfg["default_quality"] = normalize_quality(args.default_quality)
+        cfg["default_quality"] = target_quality
+        cfg[QUALITY_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
     if args.endpoint is not None:
         cfg["endpoint"] = args.endpoint.strip() or DEFAULT_GENERATIONS_ENDPOINT
     if args.edits_endpoint is not None:
         cfg["edits_endpoint"] = args.edits_endpoint.strip() or DEFAULT_EDITS_ENDPOINT
     if args.model is not None:
-        cfg["model"] = args.model.strip() or DEFAULT_MODEL
+        cfg["model"] = target_model
+        cfg[MODEL_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
     if args.user_agent is not None:
         cfg["user_agent"] = args.user_agent.strip() or build_default_user_agent()
     cfg.setdefault("endpoint", DEFAULT_GENERATIONS_ENDPOINT)
@@ -1121,6 +1213,7 @@ def command_configure(args: argparse.Namespace) -> int:
     print("API_KEY_CONFIGURED=" + ("true" if cfg.get("api_key") else "false"))
     print("DEFAULT_SIZE=" + cfg.get("default_size", DEFAULT_SIZE))
     print("DEFAULT_QUALITY=" + cfg.get("default_quality", DEFAULT_QUALITY))
+    print("MODEL=" + cfg.get("model", DEFAULT_MODEL))
     return 0
 
 
@@ -1272,7 +1365,7 @@ def add_common_request_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", help=argparse.SUPPRESS)
     add_runtime_options(parser)
     parser.add_argument("--user-agent", help="Override the HTTP User-Agent for this request.")
-    parser.add_argument("--size", choices=sorted(SUPPORTED_SIZES), help="Override image size for this request.")
+    parser.add_argument("--size", help="Override image size with auto or WIDTHxHEIGHT for this request.")
     parser.add_argument("--quality", choices=sorted(SUPPORTED_QUALITIES), help="Override image quality for this request.")
 
 
@@ -1291,11 +1384,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("configure", help="Save local API key and defaults.")
     p.add_argument("--api-key")
-    p.add_argument("--default-size", choices=sorted(SUPPORTED_SIZES))
+    p.add_argument("--default-size", help="Save auto or a WIDTHxHEIGHT default size.")
     p.add_argument("--default-quality", choices=sorted(SUPPORTED_QUALITIES))
     p.add_argument("--endpoint")
     p.add_argument("--edits-endpoint")
-    p.add_argument("--model")
+    p.add_argument("--model", choices=sorted(PERSISTENT_MODELS))
     p.add_argument("--user-agent")
     add_runtime_options(p)
     p.set_defaults(func=command_configure)

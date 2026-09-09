@@ -165,12 +165,12 @@ WorkBuddy on Windows (PowerShell):
 python C:\Users\<your-user>\.workbuddy-ai\skills\intelalloc-image\scripts\intelalloc_image.py generate --runtime-host workbuddy --runtime-model "<current-model-id>" --prompt "future city at night" --output "D:\out\city.png"
 ```
 
-Before each request, the script prints the effective size and quality:
+Before each request, the script prints the effective model, size, and quality:
 
 ```text
-REQUEST_SIZE=2048x1152
-REQUEST_QUALITY=medium
-This request uses size 2048x1152 and quality medium. You can ask for a different size or quality.
+REQUEST_MODEL=gpt-image-2.5-flare
+REQUEST_SIZE=auto
+REQUEST_QUALITY=auto
 ```
 
 It also prints request timing:
@@ -354,11 +354,15 @@ The history file is selected by the runtime host. A saved skill API key does
 not remove the WorkBuddy host requirement, because the host also selects the
 configuration, history, and default output directories.
 
+## Image Model
+
+The default model is `gpt-image-2.5-flare` for fast everyday generation. Ask to switch to `gpt-image-2.5-sunburst` for quality-focused generation and editing, or explicitly choose `gpt-image-2` as a compatibility fallback. Only these three models can be saved as defaults. The selected model remains the default for future requests on the current host until changed again.
+
 ## Size And Quality
 
-Default size is `2048x1152`; default quality is `medium`.
+Default size and quality are both `auto`.
 
-Supported sizes:
+Common size presets:
 
 ```text
 1536x1024
@@ -374,10 +378,17 @@ Supported sizes:
 Supported qualities:
 
 ```text
+auto
 low
 medium
 high
+xhigh
+max
 ```
+
+`gpt-image-2` supports only `auto`, `low`, `medium`, and `high`; `xhigh` and `max` are rejected before an API request.
+
+You can also use `auto` or a custom `WIDTHxHEIGHT`. Each edge must be at most 3840px and a multiple of 16px, the aspect ratio must not exceed 3:1, and total pixels must be 655,360 through 8,294,400.
 
 Codex and WorkBuddy should not pass `--size` or `--quality` unless you explicitly request a size or quality. Neither host should change default size or quality unless you explicitly ask to change defaults.
 
@@ -390,12 +401,14 @@ Use IntelAlloc to generate a 3840x2160 poster with high quality and save it to D
 Change defaults for future requests:
 
 ```text
-Set IntelAlloc default size to 2048x1152 and default quality to high
+Set IntelAlloc default size to auto and default quality to high
 ```
 
 ## Output Display In Codex And WorkBuddy
 
 After a successful generation or edit, the current host shows the generated image in the conversation and provides a clickable link to the complete saved directory path. Batch edits show the generated images and one link to the complete batch directory path.
+
+Only the first successful image in each Codex or WorkBuddy conversation includes the settings reminder. It states the active model, size, and quality; explains that size can switch to `auto`, a common preset, or a valid custom `WIDTHxHEIGHT`; and lists compatible quality choices. The active model uses its full official name without a positioning parenthesis: GPT Image 2.5 Flare, GPT Image 2.5 Sunburst, or GPT Image 2. The two available model alternatives retain positioning parentheses, such as GPT Image 2.5 Sunburst (for higher-quality generation and editing) and GPT Image 2 (fallback). Later successful images in the same conversation do not repeat this reminder.
 
 ## Common Errors
 
@@ -628,11 +641,17 @@ macOS 和 Linux 路径示例：
 批量把 /path/to/source 里的图片改成像素风，输出到 /path/to/out
 ```
 
+### 图片模型
+
+默认模型是面向日常快速生成的 `gpt-image-2.5-flare`。需要更高生成和编辑质量时，可以明确要求切换到 `gpt-image-2.5-sunburst`；也可以明确选择 `gpt-image-2` 作为兼容备选。只有这三个模型可保存为默认模型；模型切换后会保存为当前宿主后续请求的默认模型，直到再次更改。
+
 ### 尺寸和质量
 
-默认尺寸是 `2048x1152`，默认质量是 `medium`。
+默认尺寸和默认质量均为 `auto`。
 
-每次请求都会显示当前使用的尺寸、质量、开始时间、结束时间和耗时。当前宿主也会提醒你尺寸和质量可以更换。
+每次请求都会显示当前使用的模型、尺寸、质量、开始时间、结束时间和耗时。尺寸可使用 `auto` 或合法的 `WIDTHxHEIGHT`：宽高不超过 3840、均为 16 的倍数、比例不超过 3:1、总像素为 655,360 至 8,294,400。质量可选 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。
+
+GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会在发送接口请求前被拒绝。
 
 只修改本次请求的尺寸或质量：
 
@@ -643,12 +662,14 @@ macOS 和 Linux 路径示例：
 修改以后所有请求的默认尺寸或质量：
 
 ```text
-把 IntelAlloc 默认尺寸改成 2048x1152，默认质量改成 high
+把 IntelAlloc 默认尺寸改成 auto，默认质量改成 high
 ```
 
 ### 输出图片展示
 
 生成或编辑成功后，当前宿主会在会话里直接展示输出图片，并提供指向完整实际保存目录的可点击链接。批量编辑时，会展示生成图片列表和一个指向完整批次目录的链接。
+
+每个 Codex 或 WorkBuddy 会话仅在首张成功图片后提示一次当前模型、尺寸和质量，并说明可切换到 `auto`、常用预设或合法的自定义 `WIDTHxHEIGHT`，以及兼容的质量档。当前模型使用完整正式名称且不加定位括号，例如：`模型：GPT Image 2.5 Flare；尺寸：auto；质量：auto。` 可切换模型保留定位括号，例如 `GPT Image 2.5 Sunburst（面向更高质量生成与编辑）`、`GPT Image 2（备选）`。该提示不会写入配置或历史，同一会话后续成功图片不再重复。
 
 ### 常见问题
 
