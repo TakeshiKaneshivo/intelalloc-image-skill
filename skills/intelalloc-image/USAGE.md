@@ -173,6 +173,12 @@ REQUEST_SIZE=auto
 REQUEST_QUALITY=auto
 ```
 
+Image edit requests use JSON by default, matching the verified `gen-image`
+request path. JSON sends `images[].image_url` Data URLs. For compatibility or
+diagnostics, select multipart explicitly with `--edit-protocol multipart`; it
+sends files as `image[]`. The two protocols are never sent automatically in
+sequence, so a 400 response does not trigger a second billable request.
+
 It also prints request timing:
 
 ```text
@@ -190,6 +196,16 @@ Edit one local image:
 ```bash
 python3 ~/.codex/skills/intelalloc-image/scripts/intelalloc_image.py edit --prompt "make this watercolor" --input "/path/to/source.png" --output "/path/to/watercolor.png"
 ```
+
+Select the fallback multipart protocol for one request:
+
+```bash
+python3 ~/.codex/skills/intelalloc-image/scripts/intelalloc_image.py edit --edit-protocol multipart --prompt "make this watercolor" --input "/path/to/source.png" --output "/path/to/watercolor.png"
+```
+
+Set the persistent default with `configure --edit-protocol json` or
+`configure --edit-protocol multipart`. A request-level `--edit-protocol`
+overrides that setting. `batch-edit` accepts the same option.
 
 WorkBuddy on macOS:
 

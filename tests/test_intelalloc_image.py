@@ -6,6 +6,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import urllib.error
 import unittest
 from unittest import mock
 
@@ -475,10 +476,22 @@ class ImageModelAndParameterTests(unittest.TestCase):
             ["generate", "--prompt", "test", "--size", "1536x864", "--quality", "xhigh"]
         )
         config_args = parser.parse_args(["configure", "--default-size", "auto", "--default-quality", "max"])
+        edit_args = parser.parse_args(
+            ["edit", "--prompt", "test", "--input", "input.png", "--edit-protocol", "multipart"]
+        )
         self.assertEqual(request_args.size, "1536x864")
         self.assertEqual(request_args.quality, "xhigh")
         self.assertEqual(config_args.default_size, "auto")
         self.assertEqual(config_args.default_quality, "max")
+        self.assertEqual(edit_args.edit_protocol, "multipart")
+
+    def test_edit_protocol_normalization_and_default(self):
+        self.assertEqual(MODULE.DEFAULT_EDIT_PROTOCOL, "json")
+        self.assertEqual(MODULE.normalize_edit_protocol(None), "json")
+        self.assertEqual(MODULE.normalize_edit_protocol("JSON"), "json")
+        self.assertEqual(MODULE.normalize_edit_protocol("multipart"), "multipart")
+        with self.assertRaises(MODULE.CliError):
+            MODULE.normalize_edit_protocol("xml")
 
     def test_generation_and_edit_payloads_preserve_gpt_image_2_5_parameters(self):
         settings = {
@@ -504,10 +517,73 @@ class ImageModelAndParameterTests(unittest.TestCase):
                 upload_bytes=5,
             )
             multipart, _ = MODULE.build_multipart("test prompt", [upload], settings)
+            json_body = json.loads(MODULE.build_json_edit_body("test prompt", [upload], settings).decode("utf-8"))
 
         self.assertIn(b'gpt-image-2.5-sunburst', multipart)
         self.assertIn(b'1536x864', multipart)
         self.assertIn(b'max', multipart)
+        self.assertEqual(json_body["model"], "gpt-image-2.5-sunburst")
+        self.assertEqual(json_body["size"], "1536x864")
+        self.assertEqual(json_body["quality"], "max")
+        self.assertEqual(json_body["images"][0]["image_url"], "data:image/png;base64,aW5wdXQ=")
+
+    def test_edit_protocol_config_precedence(self):
+        parser = MODULE.build_parser()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            MODULE.pathlib.Path, "home", return_value=pathlib.Path(directory)
+        ):
+            configure_args = parser.parse_args(
+                ["configure", "--runtime-host", "codex", "--edit-protocol", "multipart"]
+            )
+            self.assertEqual(MODULE.command_configure(configure_args), 0)
+            self.assertEqual(MODULE.load_config("codex")["edit_protocol"], "multipart")
+
+            persisted_args = parser.parse_args(
+                ["edit", "--runtime-host", "codex", "--prompt", "test", "--input", "input.png"]
+            )
+            persisted = MODULE.resolve_settings(persisted_args, require_key=False)
+            self.assertEqual(persisted["edit_protocol"], "multipart")
+
+            override_args = parser.parse_args(
+                [
+                    "edit",
+                    "--runtime-host",
+                    "codex",
+                    "--edit-protocol",
+                    "json",
+                    "--prompt",
+                    "test",
+                    "--input",
+                    "input.png",
+                ]
+            )
+            override = MODULE.resolve_settings(override_args, require_key=False)
+            self.assertEqual(override["edit_protocol"], "json")
+
+    def test_http_400_does_not_trigger_multipart_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = pathlib.Path(directory) / "input.png"
+            image_path.write_bytes(b"input")
+            settings = {
+                "api_key": "test-key",
+                "model": "gpt-image-2.5-flare",
+                "default_size": "auto",
+                "default_quality": "auto",
+                "edit_protocol": "json",
+                "edits_endpoint": "https://example.test/v1/images/edits",
+                "user_agent": "test-agent",
+            }
+            error = urllib.error.HTTPError(
+                settings["edits_endpoint"],
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(b'{"error":{"message":"Bad Request"}}'),
+            )
+            with mock.patch.object(MODULE, "open_request", side_effect=error) as open_request:
+                with self.assertRaises(MODULE.ApiResponseError):
+                    MODULE.request_edit("test", [image_path], settings)
+            self.assertEqual(open_request.call_count, 1)
 
     def test_request_metadata_includes_model(self):
         output = io.StringIO()

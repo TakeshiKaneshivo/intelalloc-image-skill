@@ -56,6 +56,7 @@ Do not show command names, command-line flags, Python code, API endpoints, inter
 - Stream: `true`
 - Partial images: `2`
 - Background: `auto`
+- Edit protocol: `json` by default; `multipart` is available as a manual compatibility option
 - Max input images per edit request: `16`
 - Edit upload optimization: for multi-image edits, optimize upload copies first when Pillow is available; never modify the original input images.
 - User-Agent: generated automatically from the current host and device environment using a client-appropriate style
@@ -107,6 +108,17 @@ Update default size or quality when the user asks:
 python scripts/intelalloc_image.py configure --default-size auto --default-quality auto
 ```
 
+Image edit requests use JSON by default, matching the verified `gen-image` path:
+
+- JSON: `application/json` with images in `images[].image_url` as Base64 Data URLs.
+- Multipart: `multipart/form-data` with files in `image[]`, available only when explicitly selected.
+
+Set the persistent edit protocol with `configure --edit-protocol json` or
+`configure --edit-protocol multipart`. Override it for one `edit` or
+`batch-edit` request with `--edit-protocol json|multipart`. A failed JSON
+request is not automatically resent as multipart, so one user request never
+silently becomes two billable requests.
+
 When the user explicitly asks to switch to GPT Image 2.5 Flare, GPT Image 2.5 Sunburst, or GPT Image 2, persist that choice for the current host with `configure --model <model-id>` before continuing the image request. Persist only `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, or `gpt-image-2`. Do not change the persisted model merely because a prompt benefits from a different model. Flare is the default speed-oriented model, Sunburst is the quality-oriented model, and GPT Image 2 is a compatibility fallback that users may choose explicitly.
 
 Never change or override model, size, or quality unless the user explicitly asks. For ordinary generation/editing requests, omit `--size` and `--quality` so the local defaults are used. A size may be `auto` or any valid custom `WIDTHxHEIGHT` value. GPT Image 2 supports only `auto`, `low`, `medium`, and `high` quality; do not send `xhigh` or `max` for that model. When a request starts, read `REQUEST_MODEL`, `REQUEST_SIZE`, and `REQUEST_QUALITY` from the CLI.
@@ -152,6 +164,15 @@ Single input:
 ```bash
 python scripts/intelalloc_image.py edit --prompt "make this watercolor" --input "/path/to/source.png" --output "/path/to/watercolor.png"
 ```
+
+The default edit protocol is JSON. Use multipart only when explicitly needed:
+
+```bash
+python scripts/intelalloc_image.py edit --edit-protocol multipart --prompt "make this watercolor" --input "/path/to/source.png"
+```
+
+The same `--edit-protocol` option applies to `batch-edit`. The input image is
+never written into logs as complete Base64, and the API key is never printed.
 
 Multiple inputs:
 

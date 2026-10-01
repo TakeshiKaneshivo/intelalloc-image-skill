@@ -29,6 +29,8 @@ DEFAULT_EDITS_ENDPOINT = "https://backend.intelalloc.com/v1/images/edits"
 DEFAULT_MODEL = "gpt-image-2.5-flare"
 DEFAULT_SIZE = "auto"
 DEFAULT_QUALITY = "auto"
+DEFAULT_EDIT_PROTOCOL = "json"
+SUPPORTED_EDIT_PROTOCOLS = {"json", "multipart"}
 CODEX_CLI_VERSION = "0.77.0"
 OUTPUT_FORMAT = "png"
 PARTIAL_IMAGES = 2
@@ -105,6 +107,12 @@ Quality / 质量:
   Supported / 支持: {qualities}
   GPT Image 2: auto|low|medium|high only / 仅支持 auto|low|medium|high
 
+Edit protocol / 编辑协议:
+  Default / 默认值: {edit_protocol}
+  Request override: --edit-protocol json|multipart / 仅当前请求
+  Persistent default: configure --edit-protocol json|multipart / 保存默认值
+  JSON uses images[].image_url; multipart uses image[] / JSON 使用 images[].image_url；multipart 使用 image[]
+
 Models / 模型:
   GPT Image 2: compatibility fallback; no xhigh or max / 兼容备选；不支持 xhigh 或 max
   GPT Image 2.5 Flare: fast, for everyday generation / 速度快，适合日常生成
@@ -136,6 +144,7 @@ Diagnostics / 诊断:
         for size, zh_label, en_label in COMMON_SIZE_LABELS
     ),
     default_quality=DEFAULT_QUALITY,
+    edit_protocol=DEFAULT_EDIT_PROTOCOL,
     qualities=", ".join(sorted(SUPPORTED_QUALITIES)),
 )
 
@@ -495,6 +504,17 @@ def normalize_quality(value: Optional[str]) -> str:
     return value
 
 
+def normalize_edit_protocol(value: Optional[str]) -> str:
+    value = (value or DEFAULT_EDIT_PROTOCOL).strip().lower()
+    if value not in SUPPORTED_EDIT_PROTOCOLS:
+        raise CliError(
+            "Unsupported edit protocol: {0}. Supported protocols: {1}".format(
+                value, ", ".join(sorted(SUPPORTED_EDIT_PROTOCOLS))
+            )
+        )
+    return value
+
+
 def normalize_persistent_model(value: Optional[str]) -> str:
     if value is None:
         value = DEFAULT_MODEL
@@ -629,6 +649,9 @@ def resolve_settings(args: argparse.Namespace, require_key: bool) -> Dict[str, s
         "default_size": normalize_size(getattr(args, "size", None) or cfg.get("default_size") or DEFAULT_SIZE),
         "default_quality": normalize_quality(
             getattr(args, "quality", None) or cfg.get("default_quality") or DEFAULT_QUALITY
+        ),
+        "edit_protocol": normalize_edit_protocol(
+            getattr(args, "edit_protocol", None) or cfg.get("edit_protocol") or DEFAULT_EDIT_PROTOCOL
         ),
     }
     if require_key and not settings["api_key"]:
@@ -900,6 +923,27 @@ def cleanup_upload_images(uploads: Sequence[UploadImage]) -> None:
                 pass
 
 
+def upload_data_url(upload: UploadImage) -> str:
+    with upload.upload_path.open("rb") as f:
+        encoded = base64.b64encode(f.read()).decode("ascii")
+    return "data:{0};base64,{1}".format(upload.content_type or "application/octet-stream", encoded)
+
+
+def build_json_edit_body(prompt: str, uploads: Sequence[UploadImage], settings: Dict[str, str]) -> bytes:
+    body = {
+        "model": settings["model"],
+        "prompt": prompt,
+        "size": settings["default_size"],
+        "quality": settings["default_quality"],
+        "output_format": OUTPUT_FORMAT,
+        "stream": True,
+        "partial_images": PARTIAL_IMAGES,
+        "background": BACKGROUND,
+        "images": [{"image_url": upload_data_url(upload)} for upload in uploads],
+    }
+    return json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+
 def write_field(parts: List[bytes], boundary: str, name: str, value: str) -> None:
     parts.append(("--" + boundary + "\r\n").encode("utf-8"))
     parts.append(('Content-Disposition: form-data; name="{0}"\r\n\r\n'.format(name)).encode("utf-8"))
@@ -946,12 +990,17 @@ def request_edit(prompt: str, inputs: Sequence[pathlib.Path], settings: Dict[str
     uploads = prepare_upload_images(inputs)
 
     def once() -> bytes:
-        body, boundary = build_multipart(prompt, uploads, settings)
+        if settings["edit_protocol"] == "json":
+            body = build_json_edit_body(prompt, uploads, settings)
+            content_type = "application/json; charset=utf-8"
+        else:
+            body, boundary = build_multipart(prompt, uploads, settings)
+            content_type = "multipart/form-data; boundary=" + boundary
         req = urllib.request.Request(
             settings["edits_endpoint"],
             data=body,
             method="POST",
-            headers=request_headers(settings, "multipart/form-data; boundary=" + boundary),
+            headers=request_headers(settings, content_type),
         )
         with open_request(req) as response:
             return read_image_response(response)
@@ -1234,17 +1283,21 @@ def command_configure(args: argparse.Namespace) -> int:
         cfg[MODEL_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
     if args.user_agent is not None:
         cfg["user_agent"] = args.user_agent.strip() or build_default_user_agent()
+    if args.edit_protocol is not None:
+        cfg["edit_protocol"] = normalize_edit_protocol(args.edit_protocol)
     cfg.setdefault("endpoint", DEFAULT_GENERATIONS_ENDPOINT)
     cfg.setdefault("edits_endpoint", DEFAULT_EDITS_ENDPOINT)
     cfg.setdefault("model", DEFAULT_MODEL)
     cfg.setdefault("user_agent", build_default_user_agent())
     cfg.setdefault("default_size", DEFAULT_SIZE)
     cfg.setdefault("default_quality", DEFAULT_QUALITY)
+    cfg.setdefault("edit_protocol", DEFAULT_EDIT_PROTOCOL)
     save_json_private(config_path(runtime["host"]), cfg)
     print("CONFIG_PATH=" + str(config_path(runtime["host"])))
     print("API_KEY_CONFIGURED=" + ("true" if cfg.get("api_key") else "false"))
     print("DEFAULT_SIZE=" + cfg.get("default_size", DEFAULT_SIZE))
     print("DEFAULT_QUALITY=" + cfg.get("default_quality", DEFAULT_QUALITY))
+    print("EDIT_PROTOCOL=" + cfg.get("edit_protocol", DEFAULT_EDIT_PROTOCOL))
     print("MODEL=" + cfg.get("model", DEFAULT_MODEL))
     return 0
 
@@ -1280,6 +1333,7 @@ def command_show_config(args: argparse.Namespace) -> int:
     print("EDITS_ENDPOINT=" + settings["edits_endpoint"])
     print("DEFAULT_SIZE=" + settings["default_size"])
     print("DEFAULT_QUALITY=" + settings["default_quality"])
+    print("EDIT_PROTOCOL=" + settings["edit_protocol"])
     return 0
 
 
@@ -1401,6 +1455,14 @@ def add_common_request_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--quality", choices=sorted(SUPPORTED_QUALITIES), help="Override image quality for this request.")
 
 
+def add_edit_protocol_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--edit-protocol",
+        choices=sorted(SUPPORTED_EDIT_PROTOCOLS),
+        help="Choose the edit request protocol: json (default) or multipart.",
+    )
+
+
 def add_single_output_options(parser: argparse.ArgumentParser) -> None:
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--output", help="Save to this image file path.")
@@ -1422,11 +1484,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--edits-endpoint")
     p.add_argument("--model", choices=sorted(PERSISTENT_MODELS))
     p.add_argument("--user-agent")
+    add_edit_protocol_option(p)
     add_runtime_options(p)
     p.set_defaults(func=command_configure)
 
     p = sub.add_parser("show-config", help="Show resolved configuration without leaking the full API key.")
     add_common_request_options(p)
+    add_edit_protocol_option(p)
     p.set_defaults(func=command_show_config)
 
     p = sub.add_parser("generate", help="Generate one image from text.")
@@ -1437,6 +1501,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("edit", help="Edit using one or more input images.")
     add_common_request_options(p)
+    add_edit_protocol_option(p)
     p.add_argument("--prompt", required=True)
     p.add_argument("--input", dest="inputs", action="append")
     p.add_argument("--input-dir")
@@ -1448,6 +1513,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("batch-edit", help="Edit every supported image in a directory.")
     add_common_request_options(p)
+    add_edit_protocol_option(p)
     p.add_argument("--prompt", required=True)
     p.add_argument("--input-dir", required=True)
     p.add_argument("--output-dir")
