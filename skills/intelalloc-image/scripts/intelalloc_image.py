@@ -18,7 +18,9 @@ import ssl
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -29,12 +31,19 @@ DEFAULT_EDITS_ENDPOINT = "https://backend.intelalloc.com/v1/images/edits"
 DEFAULT_MODEL = "gpt-image-2.5-flare"
 DEFAULT_SIZE = "auto"
 DEFAULT_QUALITY = "auto"
+DEFAULT_PARTIAL_IMAGES = 3
+DEFAULT_BACKGROUND = "auto"
+DEFAULT_OUTPUT_FORMAT = "png"
+DEFAULT_N = 1
 DEFAULT_EDIT_PROTOCOL = "json"
+SUPPORTED_ENDPOINT_SCHEMES = {"http", "https"}
 SUPPORTED_EDIT_PROTOCOLS = {"json", "multipart"}
 CODEX_CLI_VERSION = "0.77.0"
-OUTPUT_FORMAT = "png"
-PARTIAL_IMAGES = 2
-BACKGROUND = "auto"
+MIN_OUTPUT_IMAGES = 1
+MAX_OUTPUT_IMAGES = 10
+SUPPORTED_PARTIAL_IMAGE_COUNTS = set(range(0, 4))
+SUPPORTED_BACKGROUNDS = {"auto", "opaque", "transparent"}
+SUPPORTED_OUTPUT_FORMATS = {"png", "jpeg", "webp"}
 MAX_INPUT_IMAGES = 16
 MAX_RETRY_COUNT = 2
 REQUEST_TIMEOUT_SECONDS = 60 * 60
@@ -107,6 +116,27 @@ Quality / 质量:
   Supported / 支持: {qualities}
   GPT Image 2: auto|low|medium|high only / 仅支持 auto|low|medium|high
 
+Streaming previews / 中间预览:
+  Request override: --partial-images 0|1|2|3 / 仅当前请求
+  Persistent default: configure --default-partial-images <count>
+  Default / 默认值: {partial_images}
+
+Background / 背景:
+  Request override: --background auto|opaque|transparent / 仅当前请求
+  Persistent default: configure --default-background <value>
+  Default / 默认值: {background}
+
+Output format / 输出格式:
+  Request override: --output-format png|jpeg|webp / 仅当前请求
+  Persistent default: configure --default-output-format <format>
+  Default / 默认值: {output_format}
+
+Final image count / 最终图片数量:
+  Request override: --n <count> / 仅当前请求
+  Persistent default: configure --default-n <count>
+  Default / 默认值: {n}
+  Supported / 支持: {min_n}-{max_n}; all returned images are saved / 全部返回图片都会保存
+
 Edit protocol / 编辑协议:
   Default / 默认值: {edit_protocol}
   Request override: --edit-protocol json|multipart / 仅当前请求
@@ -131,7 +161,7 @@ Output / 保存:
   Codex：保存到 ~/Pictures/IntelAlloc/Codex
   WorkBuddy：保存到 ~/Pictures/IntelAlloc/WorkBuddy
   未知宿主：保留 ~/Pictures/IntelAlloc
-  --output <file>       Save to an exact file / 保存到指定文件
+  --output <file>       Save to a file; extension follows the format / 保存到指定文件；扩展名跟随格式
   --output-dir <dir>    Save in a directory / 保存到指定目录
 
 Diagnostics / 诊断:
@@ -144,6 +174,12 @@ Diagnostics / 诊断:
         for size, zh_label, en_label in COMMON_SIZE_LABELS
     ),
     default_quality=DEFAULT_QUALITY,
+    partial_images=DEFAULT_PARTIAL_IMAGES,
+    background=DEFAULT_BACKGROUND,
+    output_format=DEFAULT_OUTPUT_FORMAT,
+    n=DEFAULT_N,
+    min_n=MIN_OUTPUT_IMAGES,
+    max_n=MAX_OUTPUT_IMAGES,
     edit_protocol=DEFAULT_EDIT_PROTOCOL,
     qualities=", ".join(sorted(SUPPORTED_QUALITIES)),
 )
@@ -287,7 +323,7 @@ def string_value(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-AUTOMATIC_KEY_SOURCES = {"codex-auth", "workbuddy-model"}
+AUTOMATIC_KEY_SOURCES = {"codex-auth", "codex-config", "workbuddy-model"}
 
 
 def stored_api_key_origin(cfg: Dict[str, Any]) -> str:
@@ -328,18 +364,60 @@ def load_codex_auth_api_key() -> str:
     return string_value(auth.get("OPENAI_API_KEY"))
 
 
-def load_codex_config_model() -> str:
+def load_codex_config_string(key: str) -> str:
+    """Read one quoted root-level Codex TOML string."""
     path = codex_config_path()
     if not path.exists():
         return ""
+    pattern = re.compile(
+        r"^\s*{0}\s*=\s*(?:\"([^\"]*)\"|'([^']*)')(?:\s*#.*)?$".format(re.escape(key))
+    )
     try:
+        section = ""
         for line in path.read_text(encoding="utf-8").splitlines():
-            match = re.match(r'^\s*model\s*=\s*["\']([^"\']+)["\']\s*(?:#.*)?$', line)
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            table = re.fullmatch(r"\[([^\[\]\r\n]+)\]\s*(?:#.*)?", stripped)
+            if table:
+                section = table.group(1).strip()
+                continue
+            if stripped.startswith("["):
+                return ""
+            if section:
+                continue
+            match = pattern.match(line)
             if match:
-                return match.group(1).strip()
-    except OSError:
+                return string_value(match.group(1) if match.group(1) is not None else match.group(2))
+    except (OSError, UnicodeError):
         pass
     return ""
+
+
+def load_codex_config_bearer_token() -> str:
+    """Read the first non-empty quoted bearer token from the whole Codex TOML file."""
+    path = codex_config_path()
+    if not path.exists():
+        return ""
+    pattern = re.compile(
+        r"^\s*experimental_bearer_token\s*=\s*(?:\"([^\"]*)\"|'([^']*)')(?:\s*#.*)?$"
+    )
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = pattern.match(line)
+            if not match:
+                continue
+            value = string_value(match.group(1) if match.group(1) is not None else match.group(2))
+            if value:
+                return value
+    except (OSError, UnicodeError):
+        pass
+    return ""
+
+
+def load_codex_config_model() -> str:
+    return load_codex_config_string("model")
 
 
 def normalized_model_id(value: str) -> str:
@@ -445,10 +523,17 @@ def resolve_automatic_api_key(
         result["reason"] = "runtime-model-not-gpt"
         return result
     if runtime["host"] == "codex":
-        result["api_key"] = load_codex_auth_api_key()
-        result["source"] = "codex-auth"
-        result["match"] = "auth-file"
-        result["reason"] = "key-available" if result["api_key"] else "codex-auth-key-missing"
+        auth_key = load_codex_auth_api_key()
+        if auth_key:
+            result["api_key"] = auth_key
+            result["source"] = "codex-auth"
+            result["match"] = "auth-file"
+            result["reason"] = "key-available"
+            return result
+        result["api_key"] = load_codex_config_bearer_token()
+        result["source"] = "codex-config"
+        result["match"] = "config-file" if result["api_key"] else "config-key-missing"
+        result["reason"] = "key-available" if result["api_key"] else "codex-config-key-missing"
         return result
     key, match_reason = load_workbuddy_model_api_key(runtime["model"])
     result["api_key"] = key
@@ -502,6 +587,93 @@ def normalize_quality(value: Optional[str]) -> str:
             )
         )
     return value
+
+
+def normalize_endpoint(value: Any, name: str) -> str:
+    if not isinstance(value, str):
+        raise CliError("Invalid {0}: endpoint must be a plain http:// or https:// URL.".format(name))
+    value = value.strip()
+    if len(value) >= 2 and value[0] == "`" and value[-1] == "`":
+        value = value[1:-1].strip()
+    markdown = re.fullmatch(r"\[([^\]\r\n]+)\]\((https?://[^()\s]+)\)", value)
+    if markdown:
+        value = markdown.group(2)
+    if not value or "\\" in value or "`" in value or any(char.isspace() for char in value):
+        raise CliError("Invalid {0}: endpoint must be a plain http:// or https:// URL.".format(name))
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise CliError("Invalid {0}: endpoint must contain a valid hostname and port.".format(name)) from exc
+    if parsed.scheme.lower() not in SUPPORTED_ENDPOINT_SCHEMES or not parsed.netloc or not hostname:
+        raise CliError("Invalid {0}: endpoint must be a plain http:// or https:// URL with a hostname.".format(name))
+    if parsed.username is not None or parsed.password is not None:
+        raise CliError("Invalid {0}: endpoint must not contain embedded credentials.".format(name))
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise CliError("Invalid {0}: endpoint contains control characters.".format(name))
+    if any(marker in value for marker in ("[", "]", "(", ")")):
+        raise CliError("Invalid {0}: endpoint must not contain unresolved Markdown syntax.".format(name))
+    return value
+
+
+def normalize_configured_endpoints(cfg: Dict[str, Any]) -> bool:
+    changed = False
+    for key, label in (("endpoint", "generation endpoint"), ("edits_endpoint", "edit endpoint")):
+        if key not in cfg:
+            continue
+        normalized = normalize_endpoint(cfg[key], label)
+        if cfg[key] != normalized:
+            cfg[key] = normalized
+            changed = True
+    return changed
+
+
+def normalize_bounded_integer(value: Any, name: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        raise CliError("Unsupported {0}: {1}. Use an integer from {2} to {3}.".format(name, value, minimum, maximum))
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise CliError("Unsupported {0}: {1}. Use an integer from {2} to {3}.".format(name, value, minimum, maximum)) from exc
+    if number < minimum or number > maximum:
+        raise CliError("Unsupported {0}: {1}. Use an integer from {2} to {3}.".format(name, number, minimum, maximum))
+    return number
+
+
+def normalize_partial_images(value: Any) -> int:
+    return normalize_bounded_integer(value, "partial_images", min(SUPPORTED_PARTIAL_IMAGE_COUNTS), max(SUPPORTED_PARTIAL_IMAGE_COUNTS))
+
+
+def normalize_n(value: Any) -> int:
+    return normalize_bounded_integer(value, "n", MIN_OUTPUT_IMAGES, MAX_OUTPUT_IMAGES)
+
+
+def normalize_background(value: Optional[str]) -> str:
+    value = (value or DEFAULT_BACKGROUND).strip().lower()
+    if value not in SUPPORTED_BACKGROUNDS:
+        raise CliError(
+            "Unsupported background: {0}. Supported backgrounds: {1}".format(
+                value, ", ".join(sorted(SUPPORTED_BACKGROUNDS))
+            )
+        )
+    return value
+
+
+def normalize_output_format(value: Optional[str]) -> str:
+    value = (value or DEFAULT_OUTPUT_FORMAT).strip().lower()
+    if value not in SUPPORTED_OUTPUT_FORMATS:
+        raise CliError(
+            "Unsupported output format: {0}. Supported formats: {1}".format(
+                value, ", ".join(sorted(SUPPORTED_OUTPUT_FORMATS))
+            )
+        )
+    return value
+
+
+def validate_output_options(background: str, output_format: str) -> None:
+    if background == "transparent" and output_format == "jpeg":
+        raise CliError("Transparent background requires output format png or webp; jpeg is not supported.")
 
 
 def normalize_edit_protocol(value: Optional[str]) -> str:
@@ -571,9 +743,31 @@ def migrate_gpt_image_2_5_defaults(cfg: Dict[str, Any], runtime_host: str) -> bo
     return changed
 
 
-def resolve_settings(args: argparse.Namespace, require_key: bool) -> Dict[str, str]:
+def resolve_configured_value(
+    args: argparse.Namespace, argument_name: str, cfg: Dict[str, Any], config_name: str, default: Any
+) -> Any:
+    value = getattr(args, argument_name, None)
+    if value is not None:
+        return value
+    value = cfg.get(config_name)
+    return default if value is None else value
+
+
+def resolve_endpoint_value(
+    args: argparse.Namespace, argument_name: str, cfg: Dict[str, Any], config_name: str, default: str, label: str
+) -> str:
+    override = getattr(args, argument_name, None)
+    if override is not None:
+        return normalize_endpoint(override, label)
+    value = cfg.get(config_name, default)
+    return normalize_endpoint(default if value is None else value, label)
+
+
+def resolve_settings(args: argparse.Namespace, require_key: bool) -> Dict[str, Any]:
     runtime = resolve_runtime_context(args)
     cfg = load_config(runtime["host"])
+    if normalize_configured_endpoints(cfg):
+        save_json_private(config_path(runtime["host"]), cfg)
     if require_key:
         migrate_gpt_image_2_5_defaults(cfg, runtime["host"])
     configured_candidates = (
@@ -636,20 +830,32 @@ def resolve_settings(args: argparse.Namespace, require_key: bool) -> Dict[str, s
         "stored_api_key_origin": stored_origin,
         "stored_api_key_runtime_host": string_value(cfg.get("api_key_runtime_host")),
         "stored_api_key_runtime_model": string_value(cfg.get("api_key_runtime_model")),
-        "endpoint": str(getattr(args, "endpoint", None) or cfg.get("endpoint") or DEFAULT_GENERATIONS_ENDPOINT).strip(),
-        "edits_endpoint": str(
-            getattr(args, "edits_endpoint", None) or cfg.get("edits_endpoint") or DEFAULT_EDITS_ENDPOINT
-        ).strip(),
+        "endpoint": resolve_endpoint_value(
+            args, "endpoint", cfg, "endpoint", DEFAULT_GENERATIONS_ENDPOINT, "generation endpoint"
+        ),
+        "edits_endpoint": resolve_endpoint_value(
+            args, "edits_endpoint", cfg, "edits_endpoint", DEFAULT_EDITS_ENDPOINT, "edit endpoint"
+        ),
         "model": (
             str(getattr(args, "model", None)).strip()
             if getattr(args, "model", None)
             else normalize_persistent_model(cfg.get("model"))
         ),
         "user_agent": str(getattr(args, "user_agent", None) or cfg.get("user_agent") or build_default_user_agent()).strip(),
-        "default_size": normalize_size(getattr(args, "size", None) or cfg.get("default_size") or DEFAULT_SIZE),
+        "default_size": normalize_size(resolve_configured_value(args, "size", cfg, "default_size", DEFAULT_SIZE)),
         "default_quality": normalize_quality(
-            getattr(args, "quality", None) or cfg.get("default_quality") or DEFAULT_QUALITY
+            resolve_configured_value(args, "quality", cfg, "default_quality", DEFAULT_QUALITY)
         ),
+        "partial_images": normalize_partial_images(
+            resolve_configured_value(args, "partial_images", cfg, "default_partial_images", DEFAULT_PARTIAL_IMAGES)
+        ),
+        "background": normalize_background(
+            resolve_configured_value(args, "background", cfg, "default_background", DEFAULT_BACKGROUND)
+        ),
+        "output_format": normalize_output_format(
+            resolve_configured_value(args, "output_format", cfg, "default_output_format", DEFAULT_OUTPUT_FORMAT)
+        ),
+        "n": normalize_n(resolve_configured_value(args, "n", cfg, "default_n", DEFAULT_N)),
         "edit_protocol": normalize_edit_protocol(
             getattr(args, "edit_protocol", None) or cfg.get("edit_protocol") or DEFAULT_EDIT_PROTOCOL
         ),
@@ -678,6 +884,7 @@ def resolve_settings(args: argparse.Namespace, require_key: bool) -> Dict[str, s
     if not settings["user_agent"]:
         settings["user_agent"] = build_default_user_agent()
     validate_model_quality(settings["model"], settings["default_quality"])
+    validate_output_options(settings["background"], settings["output_format"])
     return settings
 
 
@@ -704,6 +911,19 @@ def save_image(path: pathlib.Path, image_bytes: bytes) -> pathlib.Path:
     return path.resolve()
 
 
+def indexed_output_path(path: pathlib.Path, index: int, total: int) -> pathlib.Path:
+    if total == 1:
+        return path
+    return path.with_name("{0}-{1:03d}{2}".format(path.stem, index, path.suffix))
+
+
+def save_images(path: pathlib.Path, images: Sequence[bytes]) -> List[pathlib.Path]:
+    if not images:
+        raise CliError("No image bytes were returned by the API.")
+    total = len(images)
+    return [save_image(indexed_output_path(path, index, total), image) for index, image in enumerate(images, start=1)]
+
+
 def default_output_dir(runtime_host: str = "unknown") -> pathlib.Path:
     output_root = pathlib.Path.home() / "Pictures" / "IntelAlloc"
     host = str(runtime_host).strip().lower()
@@ -714,17 +934,37 @@ def default_output_dir(runtime_host: str = "unknown") -> pathlib.Path:
     return output_root
 
 
-def unique_output_name(kind: str) -> str:
+def output_extension(output_format: str) -> str:
+    return "." + ("jpeg" if output_format == "jpeg" else output_format)
+
+
+def with_output_extension(path: pathlib.Path, output_format: str) -> pathlib.Path:
+    return path.with_suffix(output_extension(output_format))
+
+
+def unique_output_name(kind: str, output_format: str = DEFAULT_OUTPUT_FORMAT) -> str:
     timestamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    return "intelalloc-{0}-{1}-{2}.png".format(kind, timestamp, uuid.uuid4().hex[:8])
+    return "intelalloc-{0}-{1}-{2}{3}".format(kind, timestamp, uuid.uuid4().hex[:8], output_extension(output_format))
 
 
-def resolve_output_path(args: argparse.Namespace, kind: str, runtime_host: str) -> pathlib.Path:
+def resolve_output_path(
+    args: argparse.Namespace, kind: str, runtime_host: str, output_format: str = DEFAULT_OUTPUT_FORMAT
+) -> pathlib.Path:
     if getattr(args, "output", None):
-        return pathlib.Path(args.output).expanduser()
+        requested = pathlib.Path(args.output).expanduser()
+        output = with_output_extension(requested, output_format)
+        expected_extension = output_extension(output_format)
+        if requested.suffix and requested.suffix.lower() != expected_extension:
+            print(
+                "WARNING=显式输出路径的扩展名 {0} 与输出格式 {1} 不一致；文件将保存为 {2}。".format(
+                    requested.suffix, output_format, output
+                ),
+                file=sys.stderr,
+            )
+        return output
     if getattr(args, "output_dir", None):
-        return pathlib.Path(args.output_dir).expanduser() / unique_output_name(kind)
-    return default_output_dir(runtime_host) / unique_output_name(kind)
+        return pathlib.Path(args.output_dir).expanduser() / unique_output_name(kind, output_format)
+    return default_output_dir(runtime_host) / unique_output_name(kind, output_format)
 
 
 def resolve_batch_output_dir(args: argparse.Namespace, runtime_host: str) -> pathlib.Path:
@@ -806,26 +1046,28 @@ def request_headers(settings: Dict[str, str], content_type: str, accept: str = "
     }
 
 
-def build_generation_body(prompt: str, settings: Dict[str, str], stream: bool = True) -> bytes:
+def build_generation_body(prompt: str, settings: Dict[str, Any], stream: bool = True) -> bytes:
     body = {
         "model": settings["model"],
         "prompt": prompt,
-        "n": 1,
+        "n": settings.get("n", DEFAULT_N),
         "size": settings["default_size"],
         "quality": settings["default_quality"],
-        "output_format": OUTPUT_FORMAT,
+        "output_format": settings.get("output_format", DEFAULT_OUTPUT_FORMAT),
         "stream": stream,
-        "partial_images": PARTIAL_IMAGES,
-        "background": BACKGROUND,
+        "partial_images": settings.get("partial_images", DEFAULT_PARTIAL_IMAGES),
+        "background": settings.get("background", DEFAULT_BACKGROUND),
     }
     return json.dumps(body, ensure_ascii=False).encode("utf-8")
 
 
-def request_generation(prompt: str, settings: Dict[str, str]) -> bytes:
-    def once() -> bytes:
+def request_generation(prompt: str, settings: Dict[str, Any]) -> List[bytes]:
+    endpoint = normalize_endpoint(settings["endpoint"], "generation endpoint")
+
+    def once() -> List[bytes]:
         body = build_generation_body(prompt, settings, stream=True)
         req = urllib.request.Request(
-            settings["endpoint"],
+            endpoint,
             data=body,
             method="POST",
             headers=request_headers(settings, "application/json; charset=utf-8"),
@@ -841,7 +1083,7 @@ def guess_mime(path: pathlib.Path) -> str:
     return mime or "application/octet-stream"
 
 
-def maybe_optimize_image(path: pathlib.Path, force: bool) -> UploadImage:
+def maybe_optimize_image(path: pathlib.Path, force: bool, allow_optimization: bool = True) -> UploadImage:
     original_bytes = path.stat().st_size
     original = UploadImage(
         source_path=path,
@@ -852,35 +1094,31 @@ def maybe_optimize_image(path: pathlib.Path, force: bool) -> UploadImage:
         original_bytes=original_bytes,
         upload_bytes=original_bytes,
     )
-    if not force and original_bytes < UPLOAD_OPTIMIZE_MIN_BYTES:
+    if not allow_optimization or (not force and original_bytes < UPLOAD_OPTIMIZE_MIN_BYTES):
         return original
     try:
         from PIL import Image, ImageOps  # type: ignore
     except Exception:
         return original
+    tmp_path: Optional[pathlib.Path] = None
     try:
         with Image.open(path) as img:
             img = ImageOps.exif_transpose(img)
             resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", getattr(Image, "BICUBIC", 3))
             img.thumbnail((UPLOAD_OPTIMIZE_MAX_EDGE, UPLOAD_OPTIMIZE_MAX_EDGE), resample)
-            if img.mode in {"RGBA", "LA"}:
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                alpha = img.getchannel("A") if img.mode == "RGBA" else img.getchannel(1)
-                background.paste(img.convert("RGB"), mask=alpha)
-                img = background
-            else:
-                img = img.convert("RGB")
+            has_alpha = "A" in img.getbands()
+            if has_alpha:
+                # A JPEG optimization would flatten transparency and change edit semantics.
+                return original
+            img = img.convert("RGB")
             tmp = tempfile.NamedTemporaryFile(prefix="intelalloc-upload-", suffix=".jpg", delete=False)
             tmp_path = pathlib.Path(tmp.name)
             tmp.close()
-            try:
-                img.save(tmp_path, "JPEG", quality=UPLOAD_OPTIMIZE_JPEG_QUALITY, optimize=True)
-            except Exception:
-                tmp_path.unlink(missing_ok=True)
-                return original
+            img.save(tmp_path, "JPEG", quality=UPLOAD_OPTIMIZE_JPEG_QUALITY, optimize=True)
         upload_bytes = tmp_path.stat().st_size
         if upload_bytes >= original_bytes:
             tmp_path.unlink(missing_ok=True)
+            tmp_path = None
             return original
         return UploadImage(
             source_path=path,
@@ -893,12 +1131,20 @@ def maybe_optimize_image(path: pathlib.Path, force: bool) -> UploadImage:
             cleanup=True,
         )
     except Exception:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
         return original
 
 
-def prepare_upload_images(inputs: Sequence[pathlib.Path]) -> List[UploadImage]:
+def prepare_upload_images(inputs: Sequence[pathlib.Path], allow_optimization: bool = True) -> List[UploadImage]:
     force = len(inputs) > 1
-    uploads = [maybe_optimize_image(path, force=force) for path in inputs]
+    uploads: List[UploadImage] = []
+    try:
+        for path in inputs:
+            uploads.append(maybe_optimize_image(path, force=force, allow_optimization=allow_optimization))
+    except Exception:
+        cleanup_upload_images(uploads)
+        raise
     optimized_count = sum(1 for item in uploads if item.optimized)
     total_original = sum(item.original_bytes for item in uploads)
     total_upload = sum(item.upload_bytes for item in uploads)
@@ -909,7 +1155,9 @@ def prepare_upload_images(inputs: Sequence[pathlib.Path]) -> List[UploadImage]:
             ),
             file=sys.stderr,
         )
-        if len(inputs) > 1 and optimized_count == 0:
+        if len(inputs) > 1 and not allow_optimization:
+            print("UPLOAD_OPTIMIZATION=disabled_for_multipart", file=sys.stderr)
+        elif len(inputs) > 1 and optimized_count == 0:
             print("UPLOAD_OPTIMIZATION=skipped_or_unavailable", file=sys.stderr)
     return uploads
 
@@ -929,16 +1177,17 @@ def upload_data_url(upload: UploadImage) -> str:
     return "data:{0};base64,{1}".format(upload.content_type or "application/octet-stream", encoded)
 
 
-def build_json_edit_body(prompt: str, uploads: Sequence[UploadImage], settings: Dict[str, str]) -> bytes:
+def build_json_edit_body(prompt: str, uploads: Sequence[UploadImage], settings: Dict[str, Any]) -> bytes:
     body = {
         "model": settings["model"],
         "prompt": prompt,
+        "n": settings.get("n", DEFAULT_N),
         "size": settings["default_size"],
         "quality": settings["default_quality"],
-        "output_format": OUTPUT_FORMAT,
+        "output_format": settings.get("output_format", DEFAULT_OUTPUT_FORMAT),
         "stream": True,
-        "partial_images": PARTIAL_IMAGES,
-        "background": BACKGROUND,
+        "partial_images": settings.get("partial_images", DEFAULT_PARTIAL_IMAGES),
+        "background": settings.get("background", DEFAULT_BACKGROUND),
         "images": [{"image_url": upload_data_url(upload)} for upload in uploads],
     }
     return json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -951,45 +1200,59 @@ def write_field(parts: List[bytes], boundary: str, name: str, value: str) -> Non
     parts.append(b"\r\n")
 
 
+def sanitize_upload_filename(filename: str) -> str:
+    """Return a header-safe ASCII basename without changing the local file."""
+    basename = re.split(r"[/\\]+", str(filename))[-1]
+    basename = unicodedata.normalize("NFKD", basename)
+    suffix_match = re.search(r"(\.(?:png|jpg|jpeg|webp))$", basename, re.IGNORECASE)
+    suffix = suffix_match.group(1).lower() if suffix_match else ""
+    stem = basename[: -len(suffix)] if suffix else basename
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    return (safe_stem or "image") + suffix
+
+
 def write_file(parts: List[bytes], boundary: str, name: str, upload: UploadImage) -> None:
+    safe_filename = sanitize_upload_filename(upload.filename)
     parts.append(("--" + boundary + "\r\n").encode("utf-8"))
     parts.append(
         (
             'Content-Disposition: form-data; name="{0}"; filename="{1}"\r\n'
             "Content-Type: {2}\r\n\r\n"
-        ).format(name, upload.filename.replace('"', ""), upload.content_type).encode("utf-8")
+        ).format(name, safe_filename, upload.content_type).encode("ascii")
     )
     with upload.upload_path.open("rb") as f:
         parts.append(f.read())
     parts.append(b"\r\n")
 
 
-def build_multipart(prompt: str, uploads: Sequence[UploadImage], settings: Dict[str, str]) -> Tuple[bytes, str]:
+def build_multipart(prompt: str, uploads: Sequence[UploadImage], settings: Dict[str, Any]) -> Tuple[bytes, str]:
     boundary = "----IntelAllocImage" + uuid.uuid4().hex
     parts: List[bytes] = []
     write_field(parts, boundary, "model", settings["model"])
     write_field(parts, boundary, "prompt", prompt)
-    write_field(parts, boundary, "n", "1")
+    write_field(parts, boundary, "n", str(settings.get("n", DEFAULT_N)))
     write_field(parts, boundary, "size", settings["default_size"])
     write_field(parts, boundary, "quality", settings["default_quality"])
-    write_field(parts, boundary, "output_format", OUTPUT_FORMAT)
+    write_field(parts, boundary, "output_format", settings.get("output_format", DEFAULT_OUTPUT_FORMAT))
     write_field(parts, boundary, "stream", "true")
-    write_field(parts, boundary, "partial_images", str(PARTIAL_IMAGES))
-    write_field(parts, boundary, "background", BACKGROUND)
+    write_field(parts, boundary, "partial_images", str(settings.get("partial_images", DEFAULT_PARTIAL_IMAGES)))
+    write_field(parts, boundary, "background", settings.get("background", DEFAULT_BACKGROUND))
     for upload in uploads:
         write_file(parts, boundary, "image[]", upload)
     parts.append(("--" + boundary + "--\r\n").encode("utf-8"))
     return b"".join(parts), boundary
 
 
-def request_edit(prompt: str, inputs: Sequence[pathlib.Path], settings: Dict[str, str]) -> bytes:
+def request_edit(prompt: str, inputs: Sequence[pathlib.Path], settings: Dict[str, Any]) -> List[bytes]:
     if not inputs:
         raise CliError("Edit requires at least one input image.")
     if len(inputs) > MAX_INPUT_IMAGES:
         raise CliError("Edit supports at most {0} input images; got {1}.".format(MAX_INPUT_IMAGES, len(inputs)))
-    uploads = prepare_upload_images(inputs)
+    endpoint = normalize_endpoint(settings["edits_endpoint"], "edit endpoint")
+    allow_optimization = settings.get("edit_protocol") == "json"
+    uploads = prepare_upload_images(inputs, allow_optimization=allow_optimization)
 
-    def once() -> bytes:
+    def once() -> List[bytes]:
         if settings["edit_protocol"] == "json":
             body = build_json_edit_body(prompt, uploads, settings)
             content_type = "application/json; charset=utf-8"
@@ -997,7 +1260,7 @@ def request_edit(prompt: str, inputs: Sequence[pathlib.Path], settings: Dict[str
             body, boundary = build_multipart(prompt, uploads, settings)
             content_type = "multipart/form-data; boundary=" + boundary
         req = urllib.request.Request(
-            settings["edits_endpoint"],
+            endpoint,
             data=body,
             method="POST",
             headers=request_headers(settings, content_type),
@@ -1011,13 +1274,13 @@ def request_edit(prompt: str, inputs: Sequence[pathlib.Path], settings: Dict[str
         cleanup_upload_images(uploads)
 
 
-def read_image_response(response) -> bytes:
+def read_image_response(response) -> List[bytes]:
     content_type = response.headers.get("Content-Type", "")
     raw = response.read()
     text = raw.decode("utf-8", errors="replace")
     if "text/event-stream" in content_type.lower() or looks_like_event_stream(text):
-        return read_streamed_image(text)
-    return read_image_from_json(text)
+        return read_streamed_images(text)
+    return read_images_from_json(text)
 
 
 def looks_like_event_stream(text: str) -> bool:
@@ -1025,57 +1288,74 @@ def looks_like_event_stream(text: str) -> bool:
     return trimmed.startswith("event:") or trimmed.startswith("data:")
 
 
-def read_streamed_image(text: str) -> bytes:
+def read_streamed_images(text: str) -> List[bytes]:
     event_lines: List[str] = []
+    final_values: List[str] = []
+
+    def collect(values: Sequence[str]) -> None:
+        final_values.extend(values)
+
     for line in text.splitlines():
         if line == "":
-            b64 = process_event_data("\n".join(event_lines))
+            values = process_event_data_values("\n".join(event_lines))
             event_lines = []
-            if b64:
-                return decode_base64_image(b64)
+            collect(values)
             continue
         if line.lower().startswith("data:"):
             event_lines.append(line[5:].lstrip())
-    b64 = process_event_data("\n".join(event_lines))
-    if b64:
-        return decode_base64_image(b64)
+    collect(process_event_data_values("\n".join(event_lines)))
+    if final_values:
+        return [decode_base64_image(value) for value in final_values]
     raise CliError("Stream ended without a final image.")
 
 
+def read_streamed_image(text: str) -> bytes:
+    """Keep the legacy single-image helper for callers outside the CLI."""
+    return read_streamed_images(text)[0]
+
+
 def process_event_data(data_text: str) -> Optional[str]:
+    values = process_event_data_values(data_text)
+    return values[0] if values else None
+
+
+def process_event_data_values(data_text: str) -> List[str]:
     data_text = (data_text or "").strip()
     if not data_text or data_text == "[DONE]":
-        return None
+        return []
     try:
         payload = json.loads(data_text)
     except Exception:
-        return None
+        return []
     if not isinstance(payload, dict):
-        return None
+        return []
     event_type = str(payload.get("type") or "")
     if "failed" in event_type.lower() or "error" in event_type.lower():
         raise ApiResponseError(data_text)
-    b64 = extract_base64(payload)
     if "partial" in event_type.lower():
-        return None
-    if b64 and (not event_type or "complete" in event_type.lower() or "completed" in event_type.lower()):
-        return b64
-    if b64 and not event_type:
-        return b64
-    return None
+        return []
+    values = extract_base64_values(payload, deduplicate=False)
+    if values and (not event_type or "complete" in event_type.lower() or "completed" in event_type.lower()):
+        return values
+    return []
 
 
-def read_image_from_json(text: str) -> bytes:
+def read_images_from_json(text: str) -> List[bytes]:
     try:
         payload = json.loads(text)
     except Exception as exc:
         raise CliError("Response was not valid JSON and not an event stream: " + str(exc)) from exc
-    b64 = extract_base64(payload)
-    if not b64:
+    values = extract_base64_values(payload, deduplicate=False)
+    if not values:
         if isinstance(payload, dict) and ("error" in payload or "message" in payload or "detail" in payload):
             raise ApiResponseError(text)
         raise CliError("Response did not contain an image base64 field.")
-    return decode_base64_image(b64)
+    return [decode_base64_image(value) for value in values]
+
+
+def read_image_from_json(text: str) -> bytes:
+    """Keep the legacy single-image helper for callers outside the CLI."""
+    return read_images_from_json(text)[0]
 
 
 def decode_base64_image(value: str) -> bytes:
@@ -1087,29 +1367,49 @@ def decode_base64_image(value: str) -> bytes:
 
 
 def extract_base64(payload: Any) -> Optional[str]:
-    if isinstance(payload, dict):
-        for key in ("b64_json", "partial_image_b64", "image", "image_b64", "image_base64", "result"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-        data = payload.get("data")
-        if isinstance(data, list) and data:
-            return extract_base64(data[0])
-        if isinstance(data, dict):
-            return extract_base64(data)
-        output = payload.get("output")
-        if isinstance(output, list):
-            for item in output:
-                found = extract_base64(item)
-                if found:
-                    return found
-        content = payload.get("content")
-        if isinstance(content, list):
-            for item in content:
-                found = extract_base64(item)
-                if found:
-                    return found
-    return None
+    values = extract_base64_values(payload)
+    return values[0] if values else None
+
+
+def extract_base64_values(payload: Any, deduplicate: bool = True) -> List[str]:
+    values: List[str] = []
+    seen = set()
+
+    def add(value: Any) -> None:
+        if not isinstance(value, str) or not value.strip():
+            return
+        if deduplicate:
+            if value in seen:
+                return
+            seen.add(value)
+        values.append(value)
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            # Partial preview payloads are intentionally excluded. Only final image fields
+            # should reach the save/display path.
+            for key in ("b64_json", "image", "image_b64", "image_base64", "result"):
+                add(value.get(key))
+            data = value.get("data")
+            if isinstance(data, list):
+                for item in data:
+                    visit(item)
+            elif isinstance(data, dict):
+                visit(data)
+            output = value.get("output")
+            if isinstance(output, list):
+                for item in output:
+                    visit(item)
+            response = value.get("response")
+            if isinstance(response, dict):
+                visit(response)
+            content = value.get("content")
+            if isinstance(content, list):
+                for item in content:
+                    visit(item)
+
+    visit(payload)
+    return values
 
 
 def extract_error_message(payload: Any) -> Optional[str]:
@@ -1209,6 +1509,31 @@ def add_history(item: Dict[str, Any], outputs: Sequence[pathlib.Path], runtime_h
     save_json_private(history_path(runtime_host), history)
 
 
+def save_history_state(history: Dict[str, Any], outputs: Sequence[pathlib.Path], runtime_host: str) -> None:
+    if outputs:
+        history["last_output"] = str(outputs[-1].resolve())
+    save_json_private(history_path(runtime_host), history)
+
+
+def start_history_item(item: Dict[str, Any], runtime_host: str) -> Dict[str, Any]:
+    history = load_history(runtime_host)
+    history["items"].insert(0, item)
+    del history["items"][HISTORY_LIMIT:]
+    save_history_state(history, [], runtime_host)
+    return history
+
+
+def redact_history_error(exc: BaseException, limit: int = 1000) -> str:
+    text = redact_sensitive_text(str(exc).strip())
+    return text[:limit] or exc.__class__.__name__
+
+
+def redact_sensitive_text(text: str) -> str:
+    """Redact API keys and bearer tokens before user-visible output or history writes."""
+    text = re.sub(r"(?i)sk-[A-Za-z0-9][A-Za-z0-9._~+/=-]{7,}", "[REDACTED_API_KEY]", text)
+    return re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", text)
+
+
 def build_history_item(kind: str, prompt: str, size: str, quality: str, outputs: Sequence[pathlib.Path], inputs: Sequence[pathlib.Path]) -> Dict[str, Any]:
     return {
         "id": _dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
@@ -1244,15 +1569,25 @@ def print_saved_many(paths: Sequence[pathlib.Path]) -> None:
         print("DISPLAY_DIRECTORY_LINK=" + directory_link(directory))
 
 
-def print_request_options(settings: Dict[str, str]) -> None:
+def print_request_options(settings: Dict[str, Any]) -> None:
     print("REQUEST_MODEL=" + settings["model"], file=sys.stderr)
     print("REQUEST_SIZE=" + settings["default_size"], file=sys.stderr)
     print("REQUEST_QUALITY=" + settings["default_quality"], file=sys.stderr)
+    print("REQUEST_PARTIAL_IMAGES=" + str(settings.get("partial_images", DEFAULT_PARTIAL_IMAGES)), file=sys.stderr)
+    print("REQUEST_BACKGROUND=" + settings.get("background", DEFAULT_BACKGROUND), file=sys.stderr)
+    print("REQUEST_OUTPUT_FORMAT=" + settings.get("output_format", DEFAULT_OUTPUT_FORMAT), file=sys.stderr)
+    print("REQUEST_N=" + str(settings.get("n", DEFAULT_N)), file=sys.stderr)
 
 
 def command_configure(args: argparse.Namespace) -> int:
     runtime = resolve_runtime_context(args)
     cfg = dict(load_config(runtime["host"]))
+    target_endpoint = resolve_endpoint_value(
+        args, "endpoint", cfg, "endpoint", DEFAULT_GENERATIONS_ENDPOINT, "generation endpoint"
+    )
+    target_edits_endpoint = resolve_endpoint_value(
+        args, "edits_endpoint", cfg, "edits_endpoint", DEFAULT_EDITS_ENDPOINT, "edit endpoint"
+    )
     target_model = (
         normalize_persistent_model(args.model)
         if args.model is not None
@@ -1261,7 +1596,18 @@ def command_configure(args: argparse.Namespace) -> int:
     target_quality = normalize_quality(
         args.default_quality if args.default_quality is not None else cfg.get("default_quality") or DEFAULT_QUALITY
     )
+    target_partial_images = normalize_partial_images(
+        resolve_configured_value(args, "default_partial_images", cfg, "default_partial_images", DEFAULT_PARTIAL_IMAGES)
+    )
+    target_background = normalize_background(
+        resolve_configured_value(args, "default_background", cfg, "default_background", DEFAULT_BACKGROUND)
+    )
+    target_output_format = normalize_output_format(
+        resolve_configured_value(args, "default_output_format", cfg, "default_output_format", DEFAULT_OUTPUT_FORMAT)
+    )
+    target_n = normalize_n(resolve_configured_value(args, "default_n", cfg, "default_n", DEFAULT_N))
     validate_model_quality(target_model, target_quality)
+    validate_output_options(target_background, target_output_format)
     if args.api_key is not None:
         cfg["api_key"] = args.api_key.strip()
         cfg["api_key_origin"] = "manual" if cfg["api_key"] else ""
@@ -1274,10 +1620,16 @@ def command_configure(args: argparse.Namespace) -> int:
     if args.default_quality is not None:
         cfg["default_quality"] = target_quality
         cfg[QUALITY_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
-    if args.endpoint is not None:
-        cfg["endpoint"] = args.endpoint.strip() or DEFAULT_GENERATIONS_ENDPOINT
-    if args.edits_endpoint is not None:
-        cfg["edits_endpoint"] = args.edits_endpoint.strip() or DEFAULT_EDITS_ENDPOINT
+    if args.default_partial_images is not None:
+        cfg["default_partial_images"] = target_partial_images
+    if args.default_background is not None:
+        cfg["default_background"] = target_background
+    if args.default_output_format is not None:
+        cfg["default_output_format"] = target_output_format
+    if args.default_n is not None:
+        cfg["default_n"] = target_n
+    cfg["endpoint"] = target_endpoint
+    cfg["edits_endpoint"] = target_edits_endpoint
     if args.model is not None:
         cfg["model"] = target_model
         cfg[MODEL_MIGRATION_KEY] = GPT_IMAGE_2_5_MIGRATION_VERSION
@@ -1291,14 +1643,24 @@ def command_configure(args: argparse.Namespace) -> int:
     cfg.setdefault("user_agent", build_default_user_agent())
     cfg.setdefault("default_size", DEFAULT_SIZE)
     cfg.setdefault("default_quality", DEFAULT_QUALITY)
+    cfg.setdefault("default_partial_images", DEFAULT_PARTIAL_IMAGES)
+    cfg.setdefault("default_background", DEFAULT_BACKGROUND)
+    cfg.setdefault("default_output_format", DEFAULT_OUTPUT_FORMAT)
+    cfg.setdefault("default_n", DEFAULT_N)
     cfg.setdefault("edit_protocol", DEFAULT_EDIT_PROTOCOL)
     save_json_private(config_path(runtime["host"]), cfg)
     print("CONFIG_PATH=" + str(config_path(runtime["host"])))
     print("API_KEY_CONFIGURED=" + ("true" if cfg.get("api_key") else "false"))
     print("DEFAULT_SIZE=" + cfg.get("default_size", DEFAULT_SIZE))
     print("DEFAULT_QUALITY=" + cfg.get("default_quality", DEFAULT_QUALITY))
+    print("DEFAULT_PARTIAL_IMAGES=" + str(cfg.get("default_partial_images", DEFAULT_PARTIAL_IMAGES)))
+    print("DEFAULT_BACKGROUND=" + cfg.get("default_background", DEFAULT_BACKGROUND))
+    print("DEFAULT_OUTPUT_FORMAT=" + cfg.get("default_output_format", DEFAULT_OUTPUT_FORMAT))
+    print("DEFAULT_N=" + str(cfg.get("default_n", DEFAULT_N)))
     print("EDIT_PROTOCOL=" + cfg.get("edit_protocol", DEFAULT_EDIT_PROTOCOL))
     print("MODEL=" + cfg.get("model", DEFAULT_MODEL))
+    print("ENDPOINT=" + cfg.get("endpoint", DEFAULT_GENERATIONS_ENDPOINT))
+    print("EDITS_ENDPOINT=" + cfg.get("edits_endpoint", DEFAULT_EDITS_ENDPOINT))
     return 0
 
 
@@ -1333,6 +1695,10 @@ def command_show_config(args: argparse.Namespace) -> int:
     print("EDITS_ENDPOINT=" + settings["edits_endpoint"])
     print("DEFAULT_SIZE=" + settings["default_size"])
     print("DEFAULT_QUALITY=" + settings["default_quality"])
+    print("DEFAULT_PARTIAL_IMAGES=" + str(settings["partial_images"]))
+    print("DEFAULT_BACKGROUND=" + settings["background"])
+    print("DEFAULT_OUTPUT_FORMAT=" + settings["output_format"])
+    print("DEFAULT_N=" + str(settings["n"]))
     print("EDIT_PROTOCOL=" + settings["edit_protocol"])
     return 0
 
@@ -1340,15 +1706,15 @@ def command_show_config(args: argparse.Namespace) -> int:
 def command_generate(args: argparse.Namespace) -> int:
     settings = resolve_settings(args, require_key=True)
     prompt = require_prompt(args.prompt)
-    output = resolve_output_path(args, "generate", settings["runtime_host"])
+    output = resolve_output_path(args, "generate", settings["runtime_host"], settings["output_format"])
     print_request_options(settings)
-    image = request_generation(prompt, settings)
-    saved = save_image(output, image)
+    images = request_generation(prompt, settings)
+    saved = save_images(output, images)
     add_history(
-        build_history_item("generate", prompt, settings["default_size"], settings["default_quality"], [saved], []),
-        [saved], settings["runtime_host"],
+        build_history_item("generate", prompt, settings["default_size"], settings["default_quality"], saved, []),
+        saved, settings["runtime_host"],
     )
-    print_saved(saved)
+    print_saved(saved[0]) if len(saved) == 1 else print_saved_many(saved)
     return 0
 
 
@@ -1358,23 +1724,27 @@ def command_edit(args: argparse.Namespace) -> int:
     inputs = resolve_inputs(args, settings["runtime_host"])
     if not inputs:
         raise CliError("Edit requires --input, --input-dir, or --from-last.")
-    output = resolve_output_path(args, "edit", settings["runtime_host"])
+    output = resolve_output_path(args, "edit", settings["runtime_host"], settings["output_format"])
     print_request_options(settings)
-    image = request_edit(prompt, inputs, settings)
-    saved = save_image(output, image)
+    images = request_edit(prompt, inputs, settings)
+    saved = save_images(output, images)
     add_history(
-        build_history_item("edit", prompt, settings["default_size"], settings["default_quality"], [saved], inputs),
-        [saved], settings["runtime_host"],
+        build_history_item("edit", prompt, settings["default_size"], settings["default_quality"], saved, inputs),
+        saved, settings["runtime_host"],
     )
     print("INPUT_IMAGES=" + json.dumps([str(p) for p in inputs], ensure_ascii=False))
-    print_saved(saved)
+    print_saved(saved[0]) if len(saved) == 1 else print_saved_many(saved)
     return 0
 
 
-def output_name_for(input_path: pathlib.Path, index: int) -> str:
+def output_name_for(
+    input_path: pathlib.Path, index: int, output_format: str, variant: int = 1, variant_total: int = 1
+) -> str:
     stem = input_path.stem or "image"
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._") or "image"
-    return "{0}-{1:03d}.png".format(safe, index)
+    if variant_total == 1:
+        return "{0}-{1:03d}{2}".format(safe, index, output_extension(output_format))
+    return "{0}-{1:03d}-{2:03d}{3}".format(safe, index, variant, output_extension(output_format))
 
 
 def command_batch_edit(args: argparse.Namespace) -> int:
@@ -1389,16 +1759,60 @@ def command_batch_edit(args: argparse.Namespace) -> int:
     output_dir = resolve_batch_output_dir(args, settings["runtime_host"])
     print_request_options(settings)
     outputs: List[pathlib.Path] = []
-    for index, input_path in enumerate(inputs, start=1):
-        output = output_dir / output_name_for(input_path, index)
-        image = request_edit(prompt, [input_path], settings)
-        saved = save_image(output, image)
-        outputs.append(saved)
-        print("BATCH_ITEM={0}/{1} INPUT={2} OUTPUT={3}".format(index, len(inputs), input_path, saved), file=sys.stderr)
-    add_history(
-        build_history_item("batch-edit", prompt, settings["default_size"], settings["default_quality"], outputs, inputs),
-        outputs, settings["runtime_host"],
+    batch_item = build_history_item(
+        "batch-edit", prompt, settings["default_size"], settings["default_quality"], outputs, inputs
     )
+    batch_item.update(
+        {
+            "status": "running",
+            "completed_items": [],
+            "failed_items": [],
+            "started_at": now_iso(),
+            "finished_at": "",
+        }
+    )
+    history = start_history_item(batch_item, settings["runtime_host"])
+    try:
+        for index, input_path in enumerate(inputs, start=1):
+            try:
+                images = request_edit(prompt, [input_path], settings)
+                item_outputs: List[pathlib.Path] = []
+                for variant, image in enumerate(images, start=1):
+                    item_outputs.append(
+                        save_image(
+                            output_dir
+                            / output_name_for(input_path, index, settings["output_format"], variant, len(images)),
+                            image,
+                        )
+                    )
+            except Exception as exc:
+                batch_item["status"] = "partial"
+                batch_item["failed_items"].append(
+                    {"input": str(input_path), "error": redact_history_error(exc)}
+                )
+                batch_item["outputs"] = [str(path.resolve()) for path in outputs]
+                batch_item["output"] = str(outputs[-1].resolve()) if outputs else ""
+                batch_item["finished_at"] = now_iso()
+                save_history_state(history, outputs, settings["runtime_host"])
+                raise
+            outputs.extend(item_outputs)
+            batch_item["completed_items"].append(
+                {"input": str(input_path), "outputs": [str(path.resolve()) for path in item_outputs]}
+            )
+            batch_item["outputs"] = [str(path.resolve()) for path in outputs]
+            batch_item["output"] = str(outputs[-1].resolve()) if outputs else ""
+            save_history_state(history, outputs, settings["runtime_host"])
+            print(
+                "BATCH_ITEM={0}/{1} INPUT={2} OUTPUTS={3}".format(
+                    index, len(inputs), input_path, json.dumps([str(path) for path in item_outputs], ensure_ascii=False)
+                ),
+                file=sys.stderr,
+            )
+    except Exception:
+        raise
+    batch_item["status"] = "succeeded"
+    batch_item["finished_at"] = now_iso()
+    save_history_state(history, outputs, settings["runtime_host"])
     print_saved_many(outputs)
     return 0
 
@@ -1453,6 +1867,10 @@ def add_common_request_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--user-agent", help="Override the HTTP User-Agent for this request.")
     parser.add_argument("--size", help="Override image size with auto or WIDTHxHEIGHT for this request.")
     parser.add_argument("--quality", choices=sorted(SUPPORTED_QUALITIES), help="Override image quality for this request.")
+    parser.add_argument("--partial-images", type=int, choices=sorted(SUPPORTED_PARTIAL_IMAGE_COUNTS))
+    parser.add_argument("--background", choices=sorted(SUPPORTED_BACKGROUNDS))
+    parser.add_argument("--output-format", choices=sorted(SUPPORTED_OUTPUT_FORMATS))
+    parser.add_argument("--n", type=int, choices=range(MIN_OUTPUT_IMAGES, MAX_OUTPUT_IMAGES + 1))
 
 
 def add_edit_protocol_option(parser: argparse.ArgumentParser) -> None:
@@ -1480,6 +1898,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--api-key")
     p.add_argument("--default-size", help="Save auto or a WIDTHxHEIGHT default size.")
     p.add_argument("--default-quality", choices=sorted(SUPPORTED_QUALITIES))
+    p.add_argument("--default-partial-images", type=int, choices=sorted(SUPPORTED_PARTIAL_IMAGE_COUNTS))
+    p.add_argument("--default-background", choices=sorted(SUPPORTED_BACKGROUNDS))
+    p.add_argument("--default-output-format", choices=sorted(SUPPORTED_OUTPUT_FORMATS))
+    p.add_argument("--default-n", type=int, choices=range(MIN_OUTPUT_IMAGES, MAX_OUTPUT_IMAGES + 1))
     p.add_argument("--endpoint")
     p.add_argument("--edits-endpoint")
     p.add_argument("--model", choices=sorted(PERSISTENT_MODELS))
@@ -1544,7 +1966,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if exc.status is not None:
             print("HTTP {0}".format(exc.status), file=sys.stderr)
         print("接口返回错误如下：", file=sys.stderr)
-        print(exc.body, file=sys.stderr)
+        print(redact_sensitive_text(exc.body), file=sys.stderr)
         if exc.status == 502:
             print("建议稍后再试。", file=sys.stderr)
         return 2

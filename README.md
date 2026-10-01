@@ -28,13 +28,14 @@ After installing the skill, ask Codex or WorkBuddy to generate an image directly
 Use IntelAlloc to generate a futuristic city at night and save it to D:\out\city.png
 ```
 
-When no save path is specified, Codex saves unique PNGs under `~/Pictures/IntelAlloc/Codex` and WorkBuddy saves them under `~/Pictures/IntelAlloc/WorkBuddy`. Successful requests display the image and a clickable link to the complete saved directory path.
+When no save path is specified, Codex and WorkBuddy save uniquely named files using the configured output format under their host-specific `IntelAlloc` folders. Successful requests display every returned image and a clickable link to the complete saved directory path.
 
-After the first successful image in each conversation, the host shows the current model, size, and quality once. For example:
+After the first successful image in each conversation, the host shows the current model, size, quality, preview count, background, output format, and final image count once. It also states that all seven settings can be changed. For example:
 
 ```text
 Model: GPT Image 2.5 Flare; size: `auto`; quality: `auto`.
-To view the complete configuration, enter `help`. The system will list all detailed sizes, quality levels, and available models with their characteristics.
+Preview images: `3`; background: `auto`; output format: `png`; final image count: `1`.
+All of these settings can be changed. To view the available options, enter `help`.
 ```
 
 Later successful images in the same conversation do not repeat this reminder. Enter `help` to see all detailed sizes, the complete quality list, and available models with their characteristics.
@@ -101,9 +102,7 @@ Download:
 releases/intelalloc-image-release.zip
 ```
 
-Unzip it, then unzip the inner `intelalloc-image.zip`.
-
-Place the extracted `intelalloc-image` folder here:
+Unzip it and place the extracted `intelalloc-image` folder here:
 
 Codex on Windows:
 
@@ -214,7 +213,7 @@ The default model is `gpt-image-2.5-flare`, optimized for fast everyday generati
 
 Default size and quality are both `auto`.
 
-Each request reports the active model, size, quality, start time, finish time, and elapsed seconds. Defaults are not changed unless you explicitly ask to change them.
+Each request reports the active model, size, quality, preview count, background, output format, final image count, start time, finish time, and elapsed seconds. Defaults are not changed unless you explicitly ask to change them.
 
 Common size presets:
 
@@ -239,6 +238,10 @@ auto, low, medium, high, xhigh, max
 
 GPT Image 2 supports only `auto`, `low`, `medium`, and `high`; `xhigh` and `max` are rejected before an API request.
 
+GPT Image 2.5 supports preview counts `0-3`, backgrounds `auto`, `opaque`, and `transparent`, output formats `png`, `jpeg`, and `webp`, and a final image count `n` from `1-10`. Transparent output requires PNG or WebP. All seven image settings can be changed; increasing the preview count or final image count may increase response size, latency, and cost.
+
+When an explicit output file is given, its extension is adjusted to the selected output format. For example, `/tmp/result.png` with `webp` output is saved as `/tmp/result.webp`, and the host prints a warning about the change.
+
 Model characteristics:
 
 ```text
@@ -262,7 +265,7 @@ When an API request fails, the current host shows the returned failure reason fi
 
 ## Safety And Devices
 
-Codex reads `OPENAI_API_KEY` from `~/.codex/auth.json` only when no skill key is configured and the current host and model are confirmed as Codex + GPT. WorkBuddy must provide `INTELALLOC_RUNTIME_HOST=workbuddy` on every call and `INTELALLOC_RUNTIME_MODEL=<current-model-id>` for image calls; when no skill key exists, the skill reads the matching GPT model's `apiKey` from `~/.workbuddy-ai/models.json`, saves it locally, and then keeps using it until manual replacement. Once a skill key is configured, model changes do not replace it. Unknown/non-GPT contexts use local manual configuration. Skill state is host-specific: Codex uses `~/.codex/intelalloc-image/` and WorkBuddy uses `~/.workbuddy-ai/intelalloc-image/`. This includes `config.json` and `history.json`; `last` and `--from-last` never cross hosts. Unknown hosts retain the legacy Codex state path and the legacy `~/Pictures/IntelAlloc` default output directory. User-specified output paths remain unchanged.
+Codex reads `OPENAI_API_KEY` from `~/.codex/auth.json` only when no higher-priority skill key is configured and the current host and runtime model are confirmed as Codex + GPT. If that value is missing or empty, it scans the entire `~/.codex/config.toml` for the first non-empty quoted `experimental_bearer_token`, regardless of its TOML section. WorkBuddy must provide `INTELALLOC_RUNTIME_HOST=workbuddy` on every call and `INTELALLOC_RUNTIME_MODEL=<current-model-id>` for image calls; when no skill key exists, the skill reads the matching GPT model's `apiKey` from `~/.workbuddy-ai/models.json`, saves it locally, and then keeps using it until manual replacement. Once a skill key is configured, model changes do not replace it. Unknown/non-GPT contexts use local manual configuration. Skill state is host-specific: Codex uses `~/.codex/intelalloc-image/` and WorkBuddy uses `~/.workbuddy-ai/intelalloc-image/`. This includes `config.json` and `history.json`; `last` and `--from-last` never cross hosts. Unknown hosts retain the legacy Codex state path and the legacy `~/Pictures/IntelAlloc` default output directory. When a user specifies an output file, its extension follows `--output-format`; a mismatched extension is replaced and the host warns before the request.
 
 Do not share:
 

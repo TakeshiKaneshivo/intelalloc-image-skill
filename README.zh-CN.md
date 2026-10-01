@@ -24,7 +24,7 @@ IntelAlloc 平台注册链接：[https://backend.intelalloc.com/register?promo=J
 releases/intelalloc-image-release.zip
 ```
 
-解压后，再解压里面的 `intelalloc-image.zip`，把得到的 `intelalloc-image` 文件夹放到：
+解压后，把得到的 `intelalloc-image` 文件夹放到：
 
 Windows 的 Codex：
 
@@ -62,13 +62,14 @@ macOS WorkBuddy：
 
 直接对 Codex 或 WorkBuddy 说“IntelAlloc 图片帮助”，或自然地询问“可以生成和修改哪些图片”“默认质量是多少”“图片会保存到哪里”。普通回复会用中文说明生成、改图、参考图、批量处理、尺寸质量和保存位置，不要求用户记忆命令，也不会展示内部路径或密钥配置命令。
 
-未指定保存位置时，图片会自动保存到系统图片目录下按宿主区分的 `IntelAlloc` 子目录；也可以直接说“保存到某个文件”或“保存到某个目录”。系统会先尝试使用符合条件的 GPT 系列模型凭据，无法自动使用时再请用户提供 IntelAlloc GPT 系列 API key。
+未指定保存位置时，图片会自动使用当前输出格式保存到系统图片目录下按宿主区分的 `IntelAlloc` 子目录；如果一次返回多张图片，系统会全部保存并展示。也可以直接说“保存到某个文件”或“保存到某个目录”。系统会先尝试使用符合条件的 GPT 系列模型凭据，无法自动使用时再请用户提供 IntelAlloc GPT 系列 API key。
 
-每个会话首张图片成功后，宿主只提示一次当前模型、尺寸和质量。例如：
+每个会话首张图片成功后，宿主只提示一次当前模型、尺寸、质量、中间预览图数量、背景、输出格式和最终图片数量，并说明这些参数都可以修改。例如：
 
 ```text
 模型：GPT Image 2.5 Flare；尺寸：`auto`；质量：`auto`。
-如需查看完整配置，请直接输入 `help`，系统会列出全部详细尺寸、完整质量列表，以及可选模型和各自特点。
+中间预览图：3；背景：`auto`；输出格式：`png`；最终图片数量：1。
+以上参数均可按需修改；如需查看可用选项，请直接输入 `help`。
 ```
 
 同一会话后续成功图片不再重复提示。需要完整配置时，直接输入 `help`，即可查看全部详细尺寸、完整质量列表和可选模型特点。
@@ -85,11 +86,11 @@ macOS WorkBuddy：
 配置 IntelAlloc API key：你的 key
 ```
 
-只有 skill 尚未配置 key 时，Codex 才会在确认宿主和 GPT 模型后读取 `~/.codex/auth.json` 的 `OPENAI_API_KEY`；Codex 可以通过会话环境或 `~/.codex/config.toml` 自动识别宿主和模型，也可以显式传入运行时参数。WorkBuddy 每次调用都必须注入 `INTELALLOC_RUNTIME_HOST=workbuddy`，图片请求还必须注入 `INTELALLOC_RUNTIME_MODEL=<当前模型 ID>`。skill 会在 `~/.workbuddy-ai/models.json` 中匹配并保存对应 `apiKey`。保存后始终使用该 key，切换模型不会替换；只有手动配置新 key 才会覆盖，且不会修改宿主凭据文件。WorkBuddy 的 `configure`、`show-config`、`last` 和 `history` 也必须带宿主标记。
+只有更高优先级的 key 都不存在时，Codex 才会在确认宿主和运行时模型为 GPT 系列后先读取 `~/.codex/auth.json` 的 `OPENAI_API_KEY`；如果该值缺失或为空，则扫描整个 `~/.codex/config.toml`，读取第一个非空且带引号的 `experimental_bearer_token`，不限制所在区块。Codex 可以通过会话环境或 `~/.codex/config.toml` 自动识别宿主和模型，也可以显式传入运行时参数。WorkBuddy 每次调用都必须注入 `INTELALLOC_RUNTIME_HOST=workbuddy`，图片请求还必须注入 `INTELALLOC_RUNTIME_MODEL=<当前模型 ID>`。skill 会在 `~/.workbuddy-ai/models.json` 中匹配并保存对应 `apiKey`。保存后始终使用该 key，切换模型不会替换；只有手动配置新 key 才会覆盖，且不会修改宿主凭据文件。WorkBuddy 的 `configure`、`show-config`、`last` 和 `history` 也必须带宿主标记。
 
 ## 生图
 
-未指定保存路径时，Codex 会保存到 `~/Pictures/IntelAlloc/Codex`，WorkBuddy 会保存到 `~/Pictures/IntelAlloc/WorkBuddy`；批量编辑会在对应目录中创建唯一批次目录。请求成功后会展示图片和指向完整实际保存目录的可点击链接。用户提供文件路径或目录时，始终使用客户提供的路径。
+未指定保存路径时，Codex 会保存到 `~/Pictures/IntelAlloc/Codex`，WorkBuddy 会保存到 `~/Pictures/IntelAlloc/WorkBuddy`；批量编辑会在对应目录中创建唯一批次目录。请求成功后会展示图片和指向完整实际保存目录的可点击链接。用户提供文件路径时，扩展名会按 `--output-format` 调整；不匹配时会在请求前提示实际保存路径。用户提供目录时使用该目录。
 
 ```text
 用 IntelAlloc 生成一张未来城市夜景，输出到 D:\out\city.png
@@ -159,11 +160,15 @@ macOS WorkBuddy：
 
 默认尺寸和默认质量均为 `auto`。
 
-每次请求都会显示当前使用的模型、尺寸、质量、开始时间、结束时间和耗时。默认值不会改变，除非明确要求修改。
+每次请求都会显示当前使用的模型、尺寸、质量、中间预览图数量、背景、输出格式、最终图片数量、开始时间、结束时间和耗时。默认值不会改变，除非明确要求修改。
 
 尺寸可使用 `auto`、常用预设或合法的 `WIDTHxHEIGHT`：宽高不超过 3840、均为 16 的倍数、比例不超过 3:1、总像素为 655,360 至 8,294,400。常用预设为：`1536x1024`（横图 / Landscape）、`1024x1536`（竖图 / Portrait）、`1024x1024`（方图 / Square）、`2048x1152`（高清横图 / HD Landscape）、`1152x2048`（高清竖图 / HD Portrait）、`2048x2048`（高清方图 / HD Square）、`3840x2160`（4K 横图 / 4K Landscape）、`2160x3840`（4K 竖图 / 4K Portrait）。质量可选 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。
 
 GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会在发送接口请求前被拒绝。
+
+GPT Image 2.5 支持中间预览图数量 `0-3`、背景 `auto`、`opaque` 和 `transparent`、输出格式 `png`、`jpeg` 和 `webp`，以及 `1-10` 张最终图片。透明背景只能使用 PNG 或 WebP。模型、尺寸、质量、中间预览图数量、背景、输出格式和最终图片数量这七项参数都可以修改；增加预览图数量或最终图片数量可能增加响应数据量、耗时和费用。
+
+如果明确指定输出文件，文件扩展名会按选择的输出格式调整。例如指定 `/tmp/result.png` 并选择 `webp` 时，实际保存为 `/tmp/result.webp`，宿主会提示这次调整。
 
 模型特点：GPT Image 2（兼容备选，不支持 `xhigh` 和 `max`）；GPT Image 2.5 Flare（速度快，适合日常生成）；GPT Image 2.5 Sunburst（面向更高质量生成与编辑）。
 
@@ -178,6 +183,8 @@ GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会
 ```text
 把 IntelAlloc 默认尺寸改成 auto，默认质量改成 high
 ```
+
+也可以直接指定中间预览图数量、背景、输出格式或最终图片数量；一次返回多张图片时，系统会全部保存并展示。
 
 macOS 和 Linux 路径示例：
 

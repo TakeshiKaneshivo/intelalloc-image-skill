@@ -24,7 +24,7 @@ Use IntelAlloc to generate a futuristic city at night and save it to D:\out\city
 
 ## Help
 
-Ask Codex or WorkBuddy naturally for IntelAlloc image help. A customer-facing answer should use plain language to describe creating images, editing images, using references, continuing from the latest result, batch processing, image size and quality, and save locations. It should not expose command names, flags, Python code, API endpoints, or internal configuration paths.
+Ask Codex or WorkBuddy naturally for IntelAlloc image help. A customer-facing answer should use plain language to describe creating images, editing images, using references, continuing from the latest result, batch processing, all configurable image settings, and save locations. It should not expose command names, flags, Python code, API endpoints, or internal configuration paths.
 
 For example: “What can IntelAlloc do, what are the default image settings, and where will the result be saved?” The current host should explain that a result is saved automatically in the system Pictures folder under `IntelAlloc` when no location is specified. The user can simply describe a file or folder location in the request. Eligible GPT-series credentials are tried automatically; if none is available, the current host asks for an IntelAlloc GPT-series API key.
 
@@ -89,7 +89,7 @@ The skill works immediately after installation. Codex can identify its runtime h
 
 Automatic credentials are used only for GPT-series models:
 
-- Codex: read `OPENAI_API_KEY` from `~/.codex/auth.json`.
+- Codex: when the runtime model is GPT and no higher-priority key is configured, read `OPENAI_API_KEY` from `~/.codex/auth.json`; if it is missing or empty, scan the entire `~/.codex/config.toml` for the first non-empty quoted `experimental_bearer_token`, regardless of its TOML section.
 - WorkBuddy: match the current model's `id` or `name` in `~/.workbuddy-ai/models.json`, then read `apiKey`.
 
 WorkBuddy integration must set `INTELALLOC_RUNTIME_HOST=workbuddy` for every `generate`, `edit`, and `batch-edit` invocation, and must also set `INTELALLOC_RUNTIME_MODEL=<current-model-id>` for those image calls. The first valid model key is saved to `config.json` and then reused for all later requests until `configure --api-key` replaces it. Unknown hosts, unknown/non-GPT models, invalid files, and unmatched models fall back to manual configuration. Runtime model lookup is skipped while a skill key is already configured.
@@ -133,13 +133,19 @@ Local config is stored outside the skill folder and isolated by host:
 
 The key lookup order is single-request `--api-key`, `INTELALLOC_API_KEY`, the local `config.json` key, then the current eligible host-specific GPT credential. Once any key is present in `config.json`, it remains the active skill key until `configure --api-key` replaces it; model changes do not replace it. When no key is configured, resolve the current runtime and read the matching host credential on every request, saving the first successful automatic key. Host credential files are never modified.
 
+Endpoint values must be plain `http://` or `https://` URLs with a hostname. If
+an exact Markdown link such as `[label](https://example.com/path)` is found,
+the skill stores and uses only its target URL. Unresolved Markdown, backslashes,
+embedded credentials, invalid schemes, and invalid hostnames are rejected
+before a request is sent.
+
 `show-config` reports the detected host, model, GPT classification, automatic credential status, persisted automatic-key status and origin, and final key source without revealing any complete key.
 
 Do not share either configuration file.
 
 ## Generate Images
 
-Without `--output` or `--output-dir`, Codex saves a unique PNG to `~/Pictures/IntelAlloc/Codex` and WorkBuddy saves one to `~/Pictures/IntelAlloc/WorkBuddy`. The directory is created after a successful response. Use `--output` for an exact file path or `--output-dir` for a user-selected directory.
+Without `--output` or `--output-dir`, Codex saves a uniquely named file using the configured output format to `~/Pictures/IntelAlloc/Codex` and WorkBuddy saves one to `~/Pictures/IntelAlloc/WorkBuddy`. The directory is created after a successful response. Use `--output` for a user-selected file path; its extension is adjusted to the selected output format when necessary, with a warning.
 
 CLI form:
 
@@ -167,6 +173,15 @@ python C:\Users\<your-user>\.workbuddy-ai\skills\intelalloc-image\scripts\intela
 
 Before each request, the script prints the effective model, size, and quality:
 
+It also prints the effective preview count, background, output format, and final image count:
+
+```text
+REQUEST_PARTIAL_IMAGES=3
+REQUEST_BACKGROUND=auto
+REQUEST_OUTPUT_FORMAT=png
+REQUEST_N=1
+```
+
 ```text
 REQUEST_MODEL=gpt-image-2.5-flare
 REQUEST_SIZE=auto
@@ -188,6 +203,8 @@ REQUEST_ELAPSED_SECONDS=...
 ```
 
 When generation succeeds, the current host shows the output image and provides a clickable link to the complete saved directory path.
+
+The defaults are `partial_images=3`, `background=auto`, `output_format=png`, and `n=1`. All seven displayed settings can be changed. Preview counts support `0-3`; final image count supports `1-10`; transparent backgrounds require PNG or WebP. When `n` is greater than one, every returned final image is saved and displayed with an automatic sequence suffix.
 
 ## Edit Images
 
@@ -237,7 +254,7 @@ python3 ~/.codex/skills/intelalloc-image/scripts/intelalloc_image.py edit --inpu
 
 You can repeat `--input` for multiple dragged images. `--from-last` appends the most recent successful IntelAlloc output as another edit input. The 16-image limit includes dragged images, directory images, and the previous output.
 
-For multi-image edits, the CLI tries to optimize upload copies to reduce request size when Pillow is available. Original input images are never modified. If Pillow is missing or the optimized copy is not smaller, the CLI uploads the original bytes.
+JSON edits may optimize large or multi-image upload copies with Pillow to reduce the Base64 request size. Opaque images may use an optimized JPEG copy; transparent images keep their original format. Multipart edits send the original file bytes and MIME types without optimization. Original input images are never modified.
 
 ## Folder Reference Images
 
@@ -301,7 +318,7 @@ python C:\Users\<your-user>\.workbuddy-ai\skills\intelalloc-image\scripts\intela
 
 ## Continue From The Previous Image
 
-Every successful generation or edit is recorded in host-specific local history:
+Every successful generation or edit is recorded in host-specific local history. A batch edit creates one progress record before processing, updates it after each completed input, and preserves a `partial` record if a later input fails:
 
 ```text
 ~/.codex/intelalloc-image/history.json
@@ -374,6 +391,8 @@ configuration, history, and default output directories.
 
 The default model is `gpt-image-2.5-flare` for fast everyday generation. Ask to switch to `gpt-image-2.5-sunburst` for quality-focused generation and editing, or explicitly choose `gpt-image-2` as a compatibility fallback. Only these three models can be saved as defaults. The selected model remains the default for future requests on the current host until changed again.
 
+The first successful image in each conversation shows the current model, size, quality, preview count, background, output format, and final image count once. It also states that all seven settings can be changed and points the user to `help` for available options.
+
 ## Size And Quality
 
 Default size and quality are both `auto`.
@@ -428,11 +447,13 @@ Change defaults for future requests:
 Set IntelAlloc default size to auto and default quality to high
 ```
 
+You can also change the preview count, background, output format, or final image count in natural language. Increasing the preview count or final image count may increase response size, latency, and cost.
+
 ## Output Display In Codex And WorkBuddy
 
 After a successful generation or edit, the current host shows the generated image in the conversation and provides a clickable link to the complete saved directory path. Batch edits show the generated images and one link to the complete batch directory path.
 
-Only the first successful image in each Codex or WorkBuddy conversation includes the settings reminder. English requests receive an English reminder; Chinese requests receive a Chinese reminder. The reminder states only the active model, size, and quality, then tells the user to enter `help`; it will list all detailed sizes, the complete quality list, and the available models with their characteristics. It does not list alternative models, positioning parentheses, or detailed size/quality options. Later successful images in the same conversation do not repeat this reminder.
+Only the first successful image in each Codex or WorkBuddy conversation includes the settings reminder. English requests receive an English reminder; Chinese requests receive a Chinese reminder. The reminder includes all seven active settings, states that all of them can be changed, and tells the user to enter `help` for available options. Later successful images in the same conversation do not repeat this reminder.
 
 ## Common Errors
 
@@ -526,7 +547,7 @@ macOS WorkBuddy：`~/.workbuddy-ai/skills/intelalloc-image`
 
 直接运行 CLI 命令时，Windows 使用 `python`，macOS 或 Linux 使用 `python3`。
 
-如果你下载的是 `intelalloc-image-release.zip`，先解压它，再解压里面的 `intelalloc-image.zip`，把得到的 `intelalloc-image` 文件夹放到上面的目录。安装后重启或刷新 Codex 或 WorkBuddy。
+如果你下载的是 `intelalloc-image-release.zip`，解压后把得到的 `intelalloc-image` 文件夹放到上面的目录。安装后重启或刷新 Codex 或 WorkBuddy。
 
 ### 帮助
 
@@ -542,7 +563,7 @@ macOS WorkBuddy：`~/.workbuddy-ai/skills/intelalloc-image`
 
 只有 GPT 系列模型才会自动读取凭据：
 
-- Codex：读取 `~/.codex/auth.json` 的 `OPENAI_API_KEY`。
+- Codex：确认运行时模型为 GPT 且没有更高优先级 key 时，读取 `~/.codex/auth.json` 的 `OPENAI_API_KEY`；如果该值缺失或为空，则扫描整个 `~/.codex/config.toml`，读取第一个非空且带引号的 `experimental_bearer_token`，不限制所在区块。
 - WorkBuddy：在 `~/.workbuddy-ai/models.json` 中匹配当前模型的 `id` 或 `name`，读取对应的 `apiKey`。
 
 WorkBuddy 集成每次 `generate`、`edit` 和 `batch-edit` 调用都必须注入 `INTELALLOC_RUNTIME_HOST=workbuddy` 和 `INTELALLOC_RUNTIME_MODEL=<当前模型 ID>`。第一次成功读取的模型 key 会保存到 `config.json`，之后一直使用，直到用户手动配置新 key。宿主未知、模型未知或非 GPT、文件无效、模型匹配失败时，改走手动配置；已有 skill key 时跳过运行时模型读取。
@@ -575,6 +596,8 @@ WorkBuddy 调用 `configure`、`show-config`、`last` 和 `history` 时也必须
 
 key 优先级为单次 `--api-key`、`INTELALLOC_API_KEY`、本地 `config.json`、当前符合条件的宿主凭据。只要 `config.json` 已有 key，后续始终使用它，切换模型也不会替换；只有用户手动配置新 key 才会覆盖。没有 key 时，每次请求都会解析当前宿主和模型并读取对应凭据，首次成功读取后保存。直接提供 `sk-...` key 后，skill 会保存该 key 并立即重试原请求，且不会回显完整 key。不会修改宿主凭据文件。`show-config` 只显示脱敏后的 key、模型匹配结果、来源和自动保存状态。
 
+Endpoint 必须是带主机名的纯 `http://` 或 `https://` URL。若发现精确的 Markdown 链接，例如 `[label](https://example.com/path)`，skill 会只保存并使用其中的目标 URL。未解析的 Markdown、反斜杠、嵌入式凭据、无效协议或无效主机会在请求发送前被拒绝。
+
 ### 继续处理上一张图片
 
 成功生成或编辑的记录保存在当前宿主的本地历史文件中：Codex 使用 `~/.codex/intelalloc-image/history.json`，WorkBuddy 使用 `~/.workbuddy-ai/intelalloc-image/history.json`。WorkBuddy 执行 `last`、`history` 或带 `--from-last` 的图片命令时，必须传入 `--runtime-host workbuddy`，避免读取 Codex 的历史；图片命令还必须传入准确的 `--runtime-model <当前模型 ID>`。`last` 和 `history` 只读历史，不要求模型参数。
@@ -603,7 +626,7 @@ python C:\Users\<你的用户名>\.workbuddy-ai\skills\intelalloc-image\scripts\
 
 下面的 Windows 示例使用 `D:\` 路径；在 macOS 或 Linux 中请改用 `~/Pictures/IntelAlloc/Codex` 或 `/path/to/input.png` 这样的 POSIX 路径。
 
-未指定输出文件或目录时，Codex 会自动保存唯一 PNG 到 `~/Pictures/IntelAlloc/Codex`，WorkBuddy 会保存到 `~/Pictures/IntelAlloc/WorkBuddy`；目录会在成功生成后创建。指定文件路径时使用该文件路径，指定目录时使用该目录。
+未指定输出文件或目录时，Codex 会按当前输出格式自动保存唯一文件到 `~/Pictures/IntelAlloc/Codex`，WorkBuddy 会保存到 `~/Pictures/IntelAlloc/WorkBuddy`；目录会在成功生成后创建。指定文件路径时，扩展名会按输出格式调整，必要时会提示；指定目录时使用该目录。
 
 ```text
 用 IntelAlloc 生成一张未来城市夜景，输出到 D:\out\city.png
@@ -704,7 +727,7 @@ GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会
 
 生成或编辑成功后，当前宿主会在会话里直接展示输出图片，并提供指向完整实际保存目录的可点击链接。批量编辑时，会展示生成图片列表和一个指向完整批次目录的链接。
 
-每个 Codex 或 WorkBuddy 会话仅在首张成功图片后提示一次当前模型、尺寸和质量，然后明确告诉用户直接输入 `help`；系统会列出全部详细尺寸、完整质量列表，以及可选模型和各自特点。中文请求返回中文提示，例如：`模型：GPT Image 2.5 Flare；尺寸：auto；质量：auto。` 后接：如需查看完整配置，请直接输入 `help`，系统会列出全部详细尺寸、完整质量列表，以及可选模型和各自特点。首次提示不再列出候选模型、定位括号或详细尺寸/质量选项；英文请求返回对应英文提示。该提示不会写入配置或历史，同一会话后续成功图片不再重复。
+每个 Codex 或 WorkBuddy 会话仅在首张成功图片后提示一次当前模型、尺寸、质量、中间预览图数量、背景、输出格式和最终图片数量，并说明这些参数都可以修改；然后提示用户输入 `help` 查看可用选项。中文请求示例：`模型：GPT Image 2.5 Flare；尺寸：auto；质量：auto；中间预览图：3；背景：auto；输出格式：png；最终图片数量：1。以上参数均可按需修改；如需查看可用选项，请输入 help。` 英文请求使用对应英文提示。该提示不会写入配置或历史，同一会话后续成功图片不再重复。
 
 ### 常见问题
 
