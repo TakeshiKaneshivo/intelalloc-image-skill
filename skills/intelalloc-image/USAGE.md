@@ -598,6 +598,8 @@ key 优先级为单次 `--api-key`、`INTELALLOC_API_KEY`、本地 `config.json`
 
 Endpoint 必须是带主机名的纯 `http://` 或 `https://` URL。若发现精确的 Markdown 链接，例如 `[label](https://example.com/path)`，skill 会只保存并使用其中的目标 URL。未解析的 Markdown、反斜杠、嵌入式凭据、无效协议或无效主机会在请求发送前被拒绝。
 
+`show-config` 会显示检测到的宿主、模型、GPT 分类、自动凭据状态、自动 key 是否已保存及其来源、最终 key 来源和脱敏后的配置，不会显示完整 key。
+
 ### 继续处理上一张图片
 
 成功生成或编辑的记录保存在当前宿主的本地历史文件中：Codex 使用 `~/.codex/intelalloc-image/history.json`，WorkBuddy 使用 `~/.workbuddy-ai/intelalloc-image/history.json`。WorkBuddy 执行 `last`、`history` 或带 `--from-last` 的图片命令时，必须传入 `--runtime-host workbuddy`，避免读取 Codex 的历史；图片命令还必须传入准确的 `--runtime-model <当前模型 ID>`。`last` 和 `history` 只读历史，不要求模型参数。
@@ -628,6 +630,8 @@ python C:\Users\<你的用户名>\.workbuddy-ai\skills\intelalloc-image\scripts\
 
 未指定输出文件或目录时，Codex 会按当前输出格式自动保存唯一文件到 `~/Pictures/IntelAlloc/Codex`，WorkBuddy 会保存到 `~/Pictures/IntelAlloc/WorkBuddy`；目录会在成功生成后创建。指定文件路径时，扩展名会按输出格式调整，必要时会提示；指定目录时使用该目录。
 
+默认值为 `partial_images=3`、`background=auto`、`output_format=png` 和 `n=1`。宿主会显示七项当前图片设置，且七项都可以修改。中间预览图数量支持 `0-3`，最终图片数量支持 `1-10`；透明背景只能使用 PNG 或 WebP。`n` 大于 1 时，所有返回的最终图片都会保存并展示，并自动添加序号后缀。
+
 ```text
 用 IntelAlloc 生成一张未来城市夜景，输出到 D:\out\city.png
 ```
@@ -651,6 +655,24 @@ python C:\Users\<你的用户名>\.workbuddy-ai\skills\intelalloc-image\scripts\
 ```
 
 如果当前宿主能拿到拖入图片的本地可读路径，就会直接使用这张图。如果拖入图片没有可读取路径，当前宿主会要求你补充本地文件路径。
+
+编辑请求默认使用 JSON 协议，与已验证的 `gen-image` 请求路径一致：图片会放在 `images[].image_url` 的 Base64 Data URL 中。需要兼容或排障时，可以明确选择 multipart 协议；文件会放在 `image[]` 中。两种协议不会自动连续发送，因此 400 响应不会触发第二次计费请求。
+
+单次编辑最多支持 16 张输入图片，也可以重复提供多个输入文件：
+
+```text
+用 IntelAlloc 合并这两张参考图，输出到 D:\out\poster.png
+```
+
+JSON 编辑在安装 Pillow 时可能会优化大图或多图上传副本，减少 Base64 请求体大小。不透明图片可以使用优化后的 JPEG 副本；带透明度的图片保持原格式。multipart 编辑始终发送原始文件字节、MIME 类型和文件名。原始输入图片不会被修改。
+
+如果要直接选择 multipart 协议，可以使用：
+
+```bash
+python3 ~/.codex/skills/intelalloc-image/scripts/intelalloc_image.py edit --edit-protocol multipart --prompt "make this watercolor" --input "/path/to/source.png"
+```
+
+也可以使用 `configure --edit-protocol json` 或 `configure --edit-protocol multipart` 设置默认协议；请求级别的 `--edit-protocol` 会覆盖默认值，`batch-edit` 也支持该选项。
 
 ### 拖入图片和上张图联动
 
@@ -680,9 +702,21 @@ python C:\Users\<你的用户名>\.workbuddy-ai\skills\intelalloc-image\scripts\
 
 默认只读取目录当前层级的 `.png`、`.jpg`、`.jpeg`、`.webp`。如果要包含子目录，需要明确说明。
 
+需要包含子目录时，明确要求递归读取：
+
+```bash
+python3 ~/.codex/skills/intelalloc-image/scripts/intelalloc_image.py edit --prompt "use these references" --input-dir "/path/to/refs" --recursive --output "/path/to/poster.png"
+```
+
+如果目录中超过 16 张支持的图片，请缩小范围或明确限制数量：
+
+```bash
+python3 ~/.codex/skills/intelalloc-image/scripts/intelalloc_image.py edit --prompt "use these references" --input-dir "/path/to/refs" --limit 16 --output "/path/to/poster.png"
+```
+
 ### 批量编辑
 
-未指定输出目录时，每个批次都会在当前宿主的默认输出目录下创建唯一目录。指定输出目录时使用客户提供的目录。
+未指定输出目录时，每个批次都会在当前宿主的默认输出目录下创建唯一目录。指定输出目录时使用客户提供的目录。批量编辑会在开始时创建进度记录，每完成一张图片就更新记录；如果后续图片失败，会保留已完成输出和 `partial` 状态的历史记录。
 
 把目录里的每张图片分别编辑成独立输出：
 
@@ -707,9 +741,36 @@ macOS 和 Linux 路径示例：
 
 默认尺寸和默认质量均为 `auto`。
 
-每次请求都会显示当前使用的模型、尺寸、质量、开始时间、结束时间和耗时。尺寸可使用 `auto` 或合法的 `WIDTHxHEIGHT`：宽高不超过 3840、均为 16 的倍数、比例不超过 3:1、总像素为 655,360 至 8,294,400。质量可选 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。
+每次请求都会显示当前使用的模型、尺寸、质量、中间预览图数量、背景、输出格式、最终图片数量、开始时间、结束时间和耗时。默认值不会改变，除非明确要求修改。
+
+常用尺寸预设：
+
+```text
+1536x1024 - 横图 / Landscape
+1024x1536 - 竖图 / Portrait
+1024x1024 - 方图 / Square
+2048x1152 - 高清横图 / HD Landscape
+1152x2048 - 高清竖图 / HD Portrait
+2048x2048 - 高清方图 / HD Square
+3840x2160 - 4K 横图 / 4K Landscape
+2160x3840 - 4K 竖图 / 4K Portrait
+```
+
+尺寸也可以使用 `auto` 或自定义的 `WIDTHxHEIGHT`：宽高不超过 3840、均为 16 的倍数、比例不超过 3:1、总像素为 655,360 至 8,294,400。质量可选 `auto`、`low`、`medium`、`high`、`xhigh`、`max`。
 
 GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会在发送接口请求前被拒绝。
+
+GPT Image 2.5 支持中间预览图数量 `0-3`、背景 `auto`、`opaque` 和 `transparent`、输出格式 `png`、`jpeg` 和 `webp`，以及 `1-10` 张最终图片。透明背景只能使用 PNG 或 WebP。模型、尺寸、质量、中间预览图数量、背景、输出格式和最终图片数量这七项参数都可以修改；增加预览图数量或最终图片数量可能增加响应数据量、耗时和费用。
+
+模型特点：
+
+```text
+GPT Image 2 - 兼容备选，不支持 xhigh 或 max
+GPT Image 2.5 Flare - 速度快，适合日常生成
+GPT Image 2.5 Sunburst - 面向更高质量生成与编辑
+```
+
+明确指定输出文件时，扩展名会按选择的输出格式调整。例如指定 `/tmp/result.png` 并选择 `webp` 时，实际保存为 `/tmp/result.webp`，宿主会提示这次调整。
 
 只修改本次请求的尺寸或质量：
 
@@ -723,6 +784,8 @@ GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会
 把 IntelAlloc 默认尺寸改成 auto，默认质量改成 high
 ```
 
+也可以直接指定中间预览图数量、背景、输出格式或最终图片数量；一次返回多张图片时，系统会全部保存并展示。
+
 ### 输出图片展示
 
 生成或编辑成功后，当前宿主会在会话里直接展示输出图片，并提供指向完整实际保存目录的可点击链接。批量编辑时，会展示生成图片列表和一个指向完整批次目录的链接。
@@ -732,15 +795,19 @@ GPT Image 2 仅支持 `auto`、`low`、`medium`、`high`；`xhigh` 和 `max` 会
 ### 常见问题
 
 - 缺 API key：重新说 `配置 IntelAlloc API key：你的 key`。
+- 图片路径不存在：提供可读取的本地图片路径。
 - 拖入图片不可读：提供图片的本地文件路径。
 - 上张图不存在：重新指定输入图片，或先生成一张新图。
 - HTTP 502：后端或上游服务暂时不可用，稍后重试。
 - Cloudflare 1010 / 403：运行 `show-config` 确认自动生成的 User-Agent 后重试；如果仍失败，需要后端放行该 API 客户端。
 - 参考图超过 16 张：缩小图片范围，或明确让当前宿主只取 16 张。
+- 保存的模型无效：使用 `configure --model` 选择 `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` 或 `gpt-image-2` 后重试；skill 不会静默替换已保存的模型。
 
-请求失败时，当前宿主会先显示失败原因，再提醒你重试或稍后再试，不会继续做其它图片操作。
+请求失败时，当前宿主会先显示返回的失败原因，再提醒你重试或稍后再试，不会声称图片已保存，也不会继续做其它图片操作。API 返回的错误正文会保持原文；批量编辑失败时，会保留已经完成的输出和 `partial` 历史记录，并报告失败的输入。
 
 ### 安全和跨设备
+
+skill 文件可以在不同设备上复用，但每台设备仍需分别维护本地输出路径、历史记录，以及在无法使用自动宿主凭据时的 API key 配置；如果设备触发 Cloudflare 规则，也可以单独配置 User-Agent。
 
 不要分享：
 

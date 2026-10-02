@@ -89,10 +89,8 @@ skills/intelalloc-image
 If using Codex skill installer, install from:
 
 ```text
-https://github.com/<your-user>/intelalloc-image-skill/tree/main/skills/intelalloc-image
+https://github.com/TakeshiKaneshivo/intelalloc-image-skill/tree/main/skills/intelalloc-image
 ```
-
-Replace `<your-user>` with the GitHub account or organization that owns this repository.
 
 ### Manual Install
 

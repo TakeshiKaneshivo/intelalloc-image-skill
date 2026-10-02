@@ -18,6 +18,22 @@ IntelAlloc 平台注册链接：[https://backend.intelalloc.com/register?promo=J
 
 ## 安装
 
+### 从 GitHub 路径安装
+
+skill 路径：
+
+```text
+skills/intelalloc-image
+```
+
+如果使用 Codex skill installer，请安装以下路径：
+
+```text
+https://github.com/TakeshiKaneshivo/intelalloc-image-skill/tree/main/skills/intelalloc-image
+```
+
+### 手动安装
+
 手动安装时，下载：
 
 ```text
@@ -87,6 +103,22 @@ macOS WorkBuddy：
 ```
 
 只有更高优先级的 key 都不存在时，Codex 才会在确认宿主和运行时模型为 GPT 系列后先读取 `~/.codex/auth.json` 的 `OPENAI_API_KEY`；如果该值缺失或为空，则扫描整个 `~/.codex/config.toml`，读取第一个非空且带引号的 `experimental_bearer_token`，不限制所在区块。Codex 可以通过会话环境或 `~/.codex/config.toml` 自动识别宿主和模型，也可以显式传入运行时参数。WorkBuddy 每次调用都必须注入 `INTELALLOC_RUNTIME_HOST=workbuddy`，图片请求还必须注入 `INTELALLOC_RUNTIME_MODEL=<当前模型 ID>`。skill 会在 `~/.workbuddy-ai/models.json` 中匹配并保存对应 `apiKey`。保存后始终使用该 key，切换模型不会替换；只有手动配置新 key 才会覆盖，且不会修改宿主凭据文件。WorkBuddy 的 `configure`、`show-config`、`last` 和 `history` 也必须带宿主标记。
+
+## WorkBuddy 运行时要求
+
+WorkBuddy 每次调用 skill 都必须提供宿主标记，以隔离配置、历史记录和默认输出目录：
+
+```text
+INTELALLOC_RUNTIME_HOST=workbuddy
+```
+
+`generate`、`edit` 和 `batch-edit` 还必须提供当前实际使用的模型 ID：
+
+```text
+INTELALLOC_RUNTIME_MODEL=<当前模型 ID>
+```
+
+`configure`、`show-config`、`last` 和 `history` 也必须带宿主标记；有当前模型 ID 时可以一并提供。保存 API key 后仍然需要这些宿主参数。
 
 ## 生图
 
@@ -199,6 +231,7 @@ macOS 和 Linux 路径示例：
 
 - 缺 API key：重新说 `配置 IntelAlloc API key：你的 key`。
 - 宿主未知、模型未知或不是 GPT 系列：请提供 IntelAlloc GPT 系列模型的 API key；可运行 `show-config` 查看检测结果。
+- 图片路径不存在：请提供可读取的本地图片路径。
 - 拖入图片不可读：提供图片的本地文件路径。
 - 上张图不存在：重新指定输入图片，或先生成一张新图。
 - HTTP 502：后端或上游服务暂时不可用，稍后重试。
@@ -224,3 +257,5 @@ API key
 ```
 
 历史记录和“上张图”只在当前设备可靠，换设备后不会自动同步。
+
+未知宿主会继续使用兼容旧版本的 Codex 状态目录和 `~/Pictures/IntelAlloc` 默认输出目录；已识别的 Codex 与 WorkBuddy 会分别使用各自的配置、历史和默认输出目录。
